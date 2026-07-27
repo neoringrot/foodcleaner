@@ -1,0 +1,38 @@
+# --- STM32CubeIDE / Eclipse generated files ---
+
+# Build output directories
+Debug/
+Release/
+build/
+
+# STM32CubeIDE settings (auto-generated, machine-specific)
+.settings/
+.metadata/
+
+# Compiled objects and binaries
+*.o
+*.obj
+*.d
+*.a
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+*.lst
+*.su
+*.cyclo
+
+# Eclipse temporary / index files
+*.tmp
+*.bak
+*.swp
+*~
+
+# CubeMX generated backup
+*.ioc.bak
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -25,7 +25,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "tb_drv8871.h"
+#include "tb_stepmotor.h"
+#include "tb_drv8306.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -114,9 +116,22 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
-  /* Infinite loop */
+  /* Motor testbeds. Set an enable flag to 1 in the debugger to run that motor,
+   * back to 0 to stop:
+   *   tb_wdoor_enable / tb_tdoor_enable          -> DRV8871 doors (U5 / U7)
+   *   tb_step1_enable / tb_step2_enable          -> steppers STEP1 / STEP2
+   *   tb_m1_enable    / tb_m2_enable             -> DRV8306 BLDC (U11 / U16),
+   *                                                 speed via tb_mX_rpm
+   * Poll all at 1 ms so the stepper pacing (tb_stepN_period_ms) is accurate;
+   * the DRV8306 testbed self-times its FGOUT window off HAL_GetTick(). */
+  TB_DRV8871_Init();
+  TB_StepMotor_Init();
+  TB_DRV8306_Init();
   for(;;)
   {
+    TB_DRV8871_Poll();
+    TB_StepMotor_Poll();
+    TB_DRV8306_Poll();
     osDelay(1);
   }
   /* USER CODE END StartDefaultTask */

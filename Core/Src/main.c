@@ -29,7 +29,13 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "gpio_ctrl.h"
+#include "drv8306.h"
+#include "lift_motor.h"
+#include "wifi.h"
+#include "ble.h"
+#include "membrane.h"
+#include "lm4871.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -107,6 +113,32 @@ int main(void)
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
 
+  /* U6 Lift DRV8871 -- IN1/IN2 on PG3/PG4 are plain GPIO (no timer), so unlike
+   * the TIM3 doors (U5/U7) this device is a GPIO-only driver. Bring it to a
+   * safe state (VM off, coast) before the scheduler starts. */
+  Lift_Init();
+
+  /* Comms modules: arm the UART RX interrupts before the scheduler starts.
+   * WiFi_Init (ESP-AT on UART4) and BLE_Init (BoT-nLE521 on UART5) must run
+   * after MX_UART4_Init()/MX_UART5_Init() above. BLE_Init also drives
+   * o_BLE_MODE LOW to select the default BYPASS mode. */
+  WiFi_Init();
+  BLE_Init();
+
+  /* Front-panel membrane keypad + LED latch on I2C1 (U8=DIS-LED @0x38,
+   * U9=DIS-SW @0x39). Must run after MX_I2C1_Init() above. Configures both
+   * TCA9554A expanders (U9 inputs, U8 outputs, all LEDs off) and seeds the
+   * debounce state; the poll loop lives in StartMembraneTask (freertos.c). */
+  Membrane_Init(NULL);
+
+  /* U15 LM4871 speaker amplifier driven by the DAC: PA4 (DAC_OUT1) -> Ci/Ri ->
+   * -IN, shutdown on PA3 (o_EN_SPK, active-low). Must run after MX_DAC_Init()
+   * and MX_GPIO_Init() above. Init parks the DAC at mid-scale and leaves the
+   * amp muted; the short power-on beep confirms the audio path end-to-end.
+   * (Blocking ~120ms via the DWT delay -- fine here, before the scheduler.) */
+  LM4871_BoardInit();
+  LM4871_Beep(&lm4871, 2000u, 120u);
+
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -175,6 +207,37 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+/**
+  * @brief  GPIO EXTI line detection callback (single override for the build).
+  * @note   Called from HAL_GPIO_EXTI_IRQHandler() (see stm32f1xx_it.c) for every
+  *         configured EXTI line on a falling edge. There can be only one strong
+  *         HAL_GPIO_EXTI_Callback in the image, so this is the central router:
+  *           1) latch the per-pin gpio_ctrl flag for ALL EXTI pins (not consumed
+  *              yet - reserved for future edge handling);
+  *           2) forward the M1/M2 FGOUT and nFAULT lines to their DRV8306
+  *              instance so tacho counting / fault latching keep working.
+  * @param  GPIO_Pin : the pin (GPIO_PIN_x) that triggered the interrupt
+  * @retval None
+  */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  gpio_ctrl_exti_dispatch(GPIO_Pin);
+
+  switch (GPIO_Pin)
+  {
+  case exti15_M1_FGOT_Pin:      /* PF15 */
+  case exti14_M1_nFAULT_Pin:    /* PF14 */
+    DRV8306_OnEXTI(&drv8306_m1, GPIO_Pin);
+    break;
+  case exti12_M2_FGOT_Pin:      /* PF12 */
+  case exti13_M2_nFAULT_Pin:    /* PF13 */
+    DRV8306_OnEXTI(&drv8306_m2, GPIO_Pin);
+    break;
+  default:
+    break;
+  }
+}
 
 /* USER CODE END 4 */
 

@@ -197,26 +197,8 @@ void DRV8306_OnEXTI(DRV8306_HandleTypeDef *h, uint16_t GPIO_Pin)
 	}
 }
 
-/* Weak HAL EXTI callback override. The M1/M2 FGOUT and nFAULT lines share the
- * EXTI15_10 vector (dispatched in stm32f1xx_it.c). This routes each line to the
- * owning DRV8306 instance and ignores all other EXTI pins (bimetal, lead
- * switch, water sensors, timer) so they keep behaving as before. If another
- * module later needs an EXTI callback, fold its handling in here too -- there
- * can be only one HAL_GPIO_EXTI_Callback in the build. */
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-	switch (GPIO_Pin)
-	{
-	case exti15_M1_FGOT_Pin:      /* PF15 */
-	case exti14_M1_nFAULT_Pin:    /* PF14 */
-		DRV8306_OnEXTI(&drv8306_m1, GPIO_Pin);
-		break;
-	case exti12_M2_FGOT_Pin:      /* PF12 */
-	case exti13_M2_nFAULT_Pin:    /* PF13 */
-		DRV8306_OnEXTI(&drv8306_m2, GPIO_Pin);
-		break;
-	default:
-		/* not a BLDC line -- leave for other handlers / ignore */
-		break;
-	}
-}
+/* NOTE: the HAL_GPIO_EXTI_Callback override now lives in main.c (the single
+ * central EXTI router for the whole build). It calls DRV8306_OnEXTI() for the
+ * M1/M2 FGOUT and nFAULT lines, so tacho counting / fault latching are
+ * unchanged; only the callback's location moved. DRV8306_OnEXTI + the
+ * drv8306_m1/m2 instances are exported from drv8306.h for that purpose. */

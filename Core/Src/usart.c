@@ -21,7 +21,32 @@
 #include "usart.h"
 
 /* USER CODE BEGIN 0 */
+#include "wifi.h"
+#include "ble.h"
 
+/* Single shared UART RX/error dispatcher.
+ *
+ * USE_HAL_UART_REGISTER_CALLBACKS is 0 in stm32f1xx_hal_conf.h, so these HAL
+ * callbacks are weak symbols that may be overridden exactly once in the whole
+ * link. Each device driver therefore exposes plain ISR hooks and we fan the
+ * events out here by peripheral instance:
+ *   UART4 -> wifi.c (ESP-AT)      UART5 -> ble.c (BoT-nLE521)
+ * USART1 is left untouched for whoever owns it. */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	if (huart->Instance == UART4)
+		WiFi_UART_RxCpltISR();
+	else if (huart->Instance == UART5)
+		BLE_UART_RxCpltISR();
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+	if (huart->Instance == UART4)
+		WiFi_UART_ErrorISR();
+	else if (huart->Instance == UART5)
+		BLE_UART_ErrorISR();
+}
 /* USER CODE END 0 */
 
 UART_HandleTypeDef huart4;
@@ -68,7 +93,7 @@ void MX_UART5_Init(void)
 
   /* USER CODE END UART5_Init 1 */
   huart5.Instance = UART5;
-  huart5.Init.BaudRate = 115200;
+  huart5.Init.BaudRate = 9600;
   huart5.Init.WordLength = UART_WORDLENGTH_8B;
   huart5.Init.StopBits = UART_STOPBITS_1;
   huart5.Init.Parity = UART_PARITY_NONE;

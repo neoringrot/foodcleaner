@@ -32,6 +32,36 @@ extern "C" {
  * maximum breakaway torque), mirroring the full-step choice L6470_Init() makes
  * for bring-up on hasudo1. */
 
+/* Motor (STEP1 and STEP2): 24BYJ48, 24 VDC 4-phase unipolar PM stepper.
+ * Datasheet performance parameters:
+ *   Drive voltage        24 VDC
+ *   Resistance           200 ohm / phase (25 C)  -> 24 V / 200 = 120 mA/phase
+ *   Step angle (1-2 ph)  5.625 deg  (HALF-STEP, at the rotor)
+ *   Pull-in torque       98 mN-m ;  detent (unpowered hold) 39.2 mN-m
+ *   Operating freq       100 PPS (recommended self-start rate)
+ *   Max pull-in freq     800 PPS (no-load, instant-start ceiling)
+ *   Max pull-out freq    1000 PPS (no-load, sync-loss ceiling)
+ *   Temp rise 40 K, weight 40 g
+ *
+ * 24 V direct-drive is safe on this board: each phase is 24 V / 200 ohm =
+ * 120 mA, so the full-step 2-phase-on pattern pulls ~240 mA from the 24 V rail
+ * (~5.8 W in the motor, within its 40 K rating). The FDN337N low-side switches
+ * and LL4148 flyback diodes handle 120 mA/phase with margin. (Do NOT wire a
+ * 5 V / ~25 ohm BYJ variant here: 24 V / 25 = ~1 A/phase would burn it out.)
+ *
+ * STEP-RATE LIMITS (open-loop, caller-enforced -- this driver does not gate
+ * the rate). Start/stop at <= STEP_MOTOR_START_PPS_MAX and never exceed
+ * STEP_MOTOR_RUN_PPS_MAX, or the motor loses sync (missed steps, no feedback
+ * to detect it). One StepMotor_Step() call = one FULL step (11.25 deg at the
+ * rotor -- twice the 5.625 deg half-step figure above).
+ *
+ * OUTPUT steps/rev: the datasheet omits the gearbox ratio. 24BYJ48 variants
+ * ship as 1/32 or 1/64, giving 32 full-steps/rotor-rev * ratio = 1024 (1/32)
+ * or 2048 (1/64) full-steps per OUTPUT revolution. Confirm the actual ratio
+ * before using step counts for position / outflow-volume calibration. */
+#define STEP_MOTOR_START_PPS_MAX  100U   /* <= self-start (pull-in) rate      */
+#define STEP_MOTOR_RUN_PPS_MAX    1000U  /* <= pull-out rate (else stalls)    */
+
 #define STEP_MOTOR_PHASES 4U
 
 typedef struct

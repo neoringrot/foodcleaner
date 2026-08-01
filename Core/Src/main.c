@@ -125,11 +125,13 @@ int main(void)
   WiFi_Init();
   BLE_Init();
 
-  /* Front-panel membrane keypad + LED latch on I2C1 (U8=DIS-LED @0x38,
-   * U9=DIS-SW @0x39). Must run after MX_I2C1_Init() above. Configures both
-   * TCA9554A expanders (U9 inputs, U8 outputs, all LEDs off) and seeds the
-   * debounce state; the poll loop lives in StartMembraneTask (freertos.c). */
-  Membrane_Init(NULL);
+  /* Front-panel membrane keypad + LED latch on I2C1 (U8=DIS-LED @0x39,
+   * U9=DIS-SW @0x38). DISABLED: the tb_tca9554 testbed (Core/Testbench) now
+   * owns U8/U9 - it configures both expanders itself in TB_TCA9554_Init()
+   * (StartMotorTask, freertos.c) and would collide with this driver on the LED
+   * port and I2C bus. Re-enable this line and Membrane_Poll() in freertos.c to
+   * restore the generic press-to-toggle keypad behaviour. */
+  /* Membrane_Init(NULL); */
 
   /* U15 LM4871 speaker amplifier driven by the DAC: PA4 (DAC_OUT1) -> Ci/Ri ->
    * -IN, shutdown on PA3 (o_EN_SPK, active-low). Must run after MX_DAC_Init()

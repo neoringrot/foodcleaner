@@ -18,6 +18,26 @@ extern "C" {
  *                    VM gated by o_EN_DOOR_WATER (PF10, net WATER-DOOR-EN)
  *   U7  Trash Door : TIM3_CH3/CH4 on PC8/PC9 (tim3_TDOOR_IN1 / tim3_TDOOR_IN2),
  *                    VM gated by o_EN_DOOR_TRASH (PF9,  net TRASH-DOOR-EN)
+ *   U6  Lift       : IN1/IN2 as plain GPIO PG3/PG4 (LIFT-IN1 / LIFT-IN2, NOT
+ *                    PWM -- full-speed bang-bang), VM gated by o_MTR_DC_LIFT
+ *                    (PB12). Driven by lift_motor.c, not a handle below.
+ *
+ * Motor (all three U5/U6/U7): JKONGMOTOR JK30ZYT-5840-577, 24 VDC brushed PMDC
+ * with a 5840 worm gearbox (body 58 x 40 x 36 mm). Envelope from the 5840-series
+ * datasheet (DC 24 V): no-load current <=0.1..0.2 A, rated current <=0.6..1.6 A,
+ * STALL current 1.4..4.4 A depending on winding, gear-limited output torque
+ * ~70 kgf-cm (~6.9 N-m). The "-577" suffix is the (high) reduction variant, so
+ * output speed is a few rpm -- slow, high-torque door/lift travel.
+ * Two consequences for this driver:
+ *   1. The worm gear is SELF-LOCKING (non-backdriveable): once VM is removed the
+ *      door/lift holds position on its own. Coast (DRV8871_Coast / Lift idle)
+ *      therefore holds; an active Brake is only needed to stop travel abruptly.
+ *   2. Stall current can reach ~4.4 A on the high-power winding, above the
+ *      DRV8871's ~3.6 A internal limit -- the chip will current-limit (not fault)
+ *      at end-stops. Confirm the board's ILIM resistor suits the actual winding.
+ * There is no encoder/tacho on these motors, so speed is pure open-loop PWM
+ * duty (coast-decay); unlike the DRV8306/BLDC path there is no measured-RPM
+ * feedback and nothing to RPM-calibrate here.
  *
  * IN1/IN2 are driven by TIM3 PWM; direction/braking follow the IN1/IN2 truth
  * table (datasheet Table 1):

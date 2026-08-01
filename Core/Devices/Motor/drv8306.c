@@ -14,6 +14,8 @@ DRV8306_HandleTypeDef drv8306_m1 =
 	.nfault_port = exti14_M1_nFAULT_GPIO_Port, .nfault_pin = exti14_M1_nFAULT_Pin, /* PF14 */
 	.fgout_port  = exti15_M1_FGOT_GPIO_Port,   .fgout_pin  = exti15_M1_FGOT_Pin,   /* PF15 */
 	.pole_pairs  = DRV8306_DEFAULT_POLE_PAIRS,
+	.gear_ratio  = DRV8306_M1_GEAR_RATIO,      /* direct drive           */
+	.noload_rpm  = DRV8306_MOTOR_NOLOAD_RPM,   /* JK60BLS03: 4000 RPM    */
 };
 
 DRV8306_HandleTypeDef drv8306_m2 =
@@ -26,6 +28,8 @@ DRV8306_HandleTypeDef drv8306_m2 =
 	.nfault_port = exti13_M2_nFAULT_GPIO_Port, .nfault_pin = exti13_M2_nFAULT_Pin, /* PF13 */
 	.fgout_port  = exti12_M2_FGOT_GPIO_Port,   .fgout_pin  = exti12_M2_FGOT_Pin,   /* PF12 */
 	.pole_pairs  = DRV8306_DEFAULT_POLE_PAIRS,
+	.gear_ratio  = DRV8306_M2_GEAR_RATIO,      /* 1:49 planetary gearbox */
+	.noload_rpm  = DRV8306_M2_NOLOAD_RPM,      /* JK42BLS02: 5000 RPM    */
 };
 
 static uint32_t DRV8306_DutyTicks(const DRV8306_HandleTypeDef *h, uint8_t duty_pct)
@@ -164,6 +168,99 @@ uint16_t DRV8306_MeasuredRPM(DRV8306_HandleTypeDef *h, uint32_t window_ms)
 	            : 0U;
 
 	return h->meas_rpm;
+}
+
+/* ---- Closed-loop speed control (FGOUT PI) ------------------------------- */
+
+static uint32_t DRV8306_DutyTicksPerMille(const DRV8306_HandleTypeDef *h,
+                                          uint16_t duty_pm)
+{
+	if (duty_pm > 1000U)
+	{
+		duty_pm = 1000U;
+	}
+	/* Round to nearest tick so 1000 per-mille lands exactly on ARR+1 (full on). */
+	return ((h->arr + 1U) * duty_pm + 500U) / 1000U;
+}
+
+void DRV8306_SetDutyPerMille(DRV8306_HandleTypeDef *h, uint16_t duty_pm)
+{
+	__HAL_TIM_SET_COMPARE(h->htim, h->pwm_ch,
+	                      DRV8306_DutyTicksPerMille(h, duty_pm));
+}
+
+int16_t DRV8306_FeedForwardPerMille(const DRV8306_HandleTypeDef *h,
+                                    uint16_t out_rpm)
+{
+	uint32_t gear   = (h->gear_ratio != 0U) ? h->gear_ratio : 1U;
+	uint32_t noload = (h->noload_rpm != 0U) ? h->noload_rpm : DRV8306_MAX_RPM;
+	uint32_t pm     = ((uint32_t)out_rpm * gear * 1000U) / noload;
+
+	if (pm > 1000U)
+	{
+		pm = 1000U;
+	}
+	return (int16_t)pm;
+}
+
+uint16_t DRV8306_MeasuredOutputRPM(DRV8306_HandleTypeDef *h, uint32_t window_ms)
+{
+	uint16_t motor = DRV8306_MeasuredRPM(h, window_ms);
+	uint16_t gear  = (h->gear_ratio != 0U) ? h->gear_ratio : 1U;
+	return (uint16_t)(motor / gear);
+}
+
+void DRV8306_PI_Init(DRV8306_PI_t *pi,
+                     int32_t kp_num, int32_t kp_den,
+                     int32_t ki_num, int32_t ki_den,
+                     int16_t out_min_pm, int16_t out_max_pm)
+{
+	pi->kp_num     = kp_num;
+	pi->kp_den     = (kp_den != 0) ? kp_den : 1;
+	pi->ki_num     = ki_num;
+	pi->ki_den     = (ki_den != 0) ? ki_den : 1;
+	pi->integ_pm   = 0;
+	pi->out_min_pm = out_min_pm;
+	pi->out_max_pm = out_max_pm;
+	pi->duty_pm    = 0;
+}
+
+int16_t DRV8306_PI_Compute(DRV8306_PI_t *pi, int32_t err,
+                           int16_t ff_pm, uint32_t dt_ms)
+{
+	int32_t p_pm  = (pi->kp_num * err) / pi->kp_den;
+	int32_t di_pm = (pi->ki_num * err * (int32_t)dt_ms) / pi->ki_den;
+
+	/* Tentative integrator + output, then clamp with conditional integration:
+	 * the integral step is only committed if the output is inside the rails, or
+	 * (on a rail) if the step unwinds toward the valid range -- classic
+	 * anti-windup that stops the integrator ballooning while duty saturates. */
+	int32_t integ = pi->integ_pm + di_pm;
+	int32_t out   = (int32_t)ff_pm + p_pm + integ;
+
+	if (out > pi->out_max_pm)
+	{
+		if (di_pm < 0)
+		{
+			pi->integ_pm = integ;    /* unwinding allowed */
+		}
+		out = pi->out_max_pm;
+	}
+	else if (out < pi->out_min_pm)
+	{
+		if (di_pm > 0)
+		{
+			pi->integ_pm = integ;    /* unwinding allowed */
+		}
+		out = pi->out_min_pm;
+	}
+	else
+	{
+		pi->integ_pm = integ;        /* not saturated: accumulate */
+	}
+
+	pi->duty_pm = (int16_t)out;
+	return pi->duty_pm;
 }
 
 uint8_t DRV8306_IsFault(DRV8306_HandleTypeDef *h)

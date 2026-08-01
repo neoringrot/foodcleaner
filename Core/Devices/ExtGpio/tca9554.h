@@ -27,13 +27,13 @@ extern "C" {
  *   0100b -> base 0x20 .. 0x27. If a plain TCA9554 is ever fitted, change
  *   TCA9554_ADDR_BASE to 0x20.
  *
- * IMPORTANT - address pins on the schematic:
- *   A0/A1/A2 of U8, U9 and U10 are ALL strapped to DGND in the current
- *   netlist, i.e. hardware address 000 for every device -> they would all
- *   answer at 0x38 and collide. Per the design intent (and the request), U9 is
- *   treated as if its A0 pin were pulled HIGH, giving U9 = 0x39. U8 keeps the
- *   000 strap = 0x38. Fix the strapping (or solder bridges) on the PCB to make
- *   this match; the firmware addresses below assume the corrected wiring.
+ * IMPORTANT - address pins on the schematic (confirmed strapping):
+ *   Each device gets a unique hardware address via its A2/A1/A0 straps so the
+ *   three expanders do not collide on the shared bus:
+ *        U8  A2=0 A1=0 A0=1  ->  0x39   (DIS-LED driver)
+ *        U9  A2=0 A1=0 A0=0  ->  0x38   (DIS-SW keypad)
+ *        U10 A2=0 A1=1 A0=1  ->  0x3B   (other I/O)
+ *   The firmware addresses below match this wiring; keep the PCB straps in sync.
  *
  * INT pin (pin 13, open-drain active-low): NOT routed to the MCU on this board
  * for U8/U9/U10. A hardware interrupt from the expander is therefore not
@@ -60,9 +60,9 @@ extern "C" {
 #define TCA9554_ADDR(a2, a1, a0) \
 	((uint8_t)(TCA9554_ADDR_BASE | (((a2) & 1U) << 2) | (((a1) & 1U) << 1) | ((a0) & 1U)))
 
-#define TCA9554_U8_ADDR   TCA9554_ADDR(0, 0, 0)   /* 0x38 - DIS-LED driver (outputs) */
-#define TCA9554_U9_ADDR   TCA9554_ADDR(0, 0, 1)   /* 0x39 - DIS-SW keypad (inputs), A0 assumed HIGH */
-#define TCA9554_U10_ADDR  TCA9554_ADDR(0, 1, 0)   /* 0x3A - reserved for U10          */
+#define TCA9554_U8_ADDR   TCA9554_ADDR(0, 0, 1)   /* 0x39 - DIS-LED driver (outputs), A0 HIGH        */
+#define TCA9554_U9_ADDR   TCA9554_ADDR(0, 0, 0)   /* 0x38 - DIS-SW keypad (inputs), A0/A1/A2 LOW     */
+#define TCA9554_U10_ADDR  TCA9554_ADDR(0, 1, 1)   /* 0x3B - other I/O,             A0/A1 HIGH        */
 
 /* ---- Direction masks for TCA9554_Init(config) ----------------------- */
 #define TCA9554_ALL_OUTPUTS   0x00U   /* every pin driven      */

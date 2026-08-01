@@ -27,7 +27,9 @@
 /* USER CODE BEGIN Includes */
 #include "tb_drv8871.h"
 #include "tb_stepmotor.h"
-#include "tb_drv8306.h"
+#include "drv8306.h"
+#include "bldc_ctrl.h"
+#include "tb_tca9554.h"
 #include "tb_lift.h"
 #include "distance.h"
 #include "membrane.h"
@@ -82,6 +84,11 @@ const osThreadAttr_t defaultTask_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+/* Definitions for i2c1_mutex */
+osMutexId_t i2c1_mutexHandle;
+const osMutexAttr_t i2c1_mutex_attributes = {
+  .name = "i2c1_mutex"
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -101,6 +108,9 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
 
   /* USER CODE END Init */
+  /* Create the mutex(es) */
+  /* creation of i2c1_mutex */
+  i2c1_mutexHandle = osMutexNew(&i2c1_mutex_attributes);
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -175,7 +185,11 @@ void StartDefaultTask(void *argument)
       g_hall_mask = HallSensor_GetMask();
     }
 
-    (void)Membrane_Poll();
+    /* Membrane_Poll() is DISABLED while the tb_tca9554 keypad testbed owns
+     * U8/U9 (it drives the LEDs and BLDC motors from the same expanders and
+     * would fight this driver over the LED port / I2C bus). Re-enable this and
+     * Membrane_Init() in main.c if you drop that testbed. */
+    /* (void)Membrane_Poll(); */
     osDelay(100);
   }
   /* USER CODE END StartDefaultTask */
@@ -190,8 +204,11 @@ void StartDefaultTask(void *argument)
   *         motor, clear it to stop:
   *           tb_wdoor_enable / tb_tdoor_enable -> DRV8871 doors (U5 / U7)
   *           tb_step1_enable / tb_step2_enable -> steppers STEP1 / STEP2
-  *           tb_m1_enable    / tb_m2_enable    -> DRV8306 BLDC (U11 / U16),
-  *                                                speed via tb_mX_rpm
+  *           g_grind_ctrl (M1/U11) & g_stir_ctrl (M2/U16) -> DRV8306 BLDC, both
+  *                                                CLOSED-LOOP: drive from the
+  *                                                keypad (odd SW=M1, even SW=M2)
+  *                                                or set g_*_ctrl.target_out_rpm;
+  *                                                status in .meas_out_rpm/.state
   *           tb_lift_enable                    -> U6 lift (dir: tb_lift_reverse)
   *         Poll all at 1 ms so the stepper pacing (tb_stepN_period_ms) is
   *         accurate; the DRV8306 testbed self-times its FGOUT window off
@@ -203,13 +220,20 @@ void StartMotorTask(void *argument)
 {
   TB_DRV8871_Init();
   TB_StepMotor_Init();
-  TB_DRV8306_Init();
+  DRV8306_InitAll();               /* bring up drv8306_m1 + drv8306_m2         */
+  BldcCtrl_Init(&g_grind_ctrl);    /* M1 (U11) grinder closed loop            */
+  BldcCtrl_Init(&g_stir_ctrl);     /* M2 (U16) stirrer closed loop            */
+  TB_TCA9554_Init();               /* keypad(U9); after the controllers above */
   TB_Lift_Init();
   for(;;)
   {
     TB_DRV8871_Poll();
     TB_StepMotor_Poll();
-    TB_DRV8306_Poll();
+    /* Read the keypad and translate presses into BldcCtrl commands BEFORE the
+     * control ticks apply them, so a press acts on the same cycle. */
+    TB_TCA9554_Poll();
+    BldcCtrl_Tick(&g_grind_ctrl, HAL_GetTick());  /* M1 closed-loop PI (100 ms) */
+    BldcCtrl_Tick(&g_stir_ctrl,  HAL_GetTick());  /* M2 closed-loop PI (100 ms) */
     TB_Lift_Poll();
     osDelay(1);
   }

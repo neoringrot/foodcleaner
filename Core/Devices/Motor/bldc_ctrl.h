@@ -134,8 +134,8 @@ void    BldcCtrl_Init(BldcCtrl_t *c);
 void    BldcCtrl_Tick(BldcCtrl_t *c, uint32_t now_ms);
 
 /* Panel actions (called from tb_tca9554 on a fresh SWn press). */
-void    BldcCtrl_Start(BldcCtrl_t *c, uint8_t reverse); /* start at ladder rung 0 */
-void    BldcCtrl_Stop(BldcCtrl_t *c);                   /* stop + re-arm (clears lock) */
+void    BldcCtrl_Start(BldcCtrl_t *c, uint8_t reverse); /* start; resumes last speed rung */
+void    BldcCtrl_Stop(BldcCtrl_t *c);                   /* stop + re-arm (clears lock; keeps rung) */
 void    BldcCtrl_SpeedStep(BldcCtrl_t *c);              /* next ladder rung (cycles)   */
 
 /* 1 = motor currently spinning (RUN or UNJAM); mirrors c->running. */

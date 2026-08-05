@@ -112,8 +112,10 @@ void BldcCtrl_Start(BldcCtrl_t *c, uint8_t reverse)
 		return;                              /* soft-locked: Stop() to re-arm  */
 	}
 
-	c->spd_idx        = 0U;                  /* every start begins at rung 0   */
-	c->target_out_rpm = k->ladder[0];
+	/* Resume the LAST speed rung chosen with SW7/SW8: spd_idx persists across
+	 * Stop, so a restart returns to the previous RPM instead of the bottom rung.
+	 * The power-on default is rung 0 (set once in BldcCtrl_Init). */
+	c->target_out_rpm = k->ladder[c->spd_idx];
 	c->sp_out_rpm     = 0U;                  /* soft-start: ramp up from rest  */
 	c->reverse        = reverse ? 1U : 0U;
 	c->retry_cnt      = 0U;
@@ -146,8 +148,8 @@ void BldcCtrl_Stop(BldcCtrl_t *c)
 
 	DRV8306_Stop(k->h);                      /* coast (duty 0) + sleep          */
 	c->running        = 0U;
-	c->spd_idx        = 0U;
-	c->target_out_rpm = k->ladder[0];
+	/* Keep c->spd_idx so the next Start resumes the last-selected RPM rung. */
+	c->target_out_rpm = k->ladder[c->spd_idx];
 	c->sp_out_rpm     = 0U;
 	c->retry_cnt      = 0U;
 	c->duty_pm        = 0;

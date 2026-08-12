@@ -48,7 +48,7 @@ void MX_ADC1_Init(void)
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.NbrOfConversion = 4;
+  hadc1.Init.NbrOfConversion = 7;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
   {
     Error_Handler();
@@ -90,6 +90,33 @@ void MX_ADC1_Init(void)
   {
     Error_Handler();
   }
+
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_15;
+  sConfig.Rank = ADC_REGULAR_RANK_5;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_8;
+  sConfig.Rank = ADC_REGULAR_RANK_6;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_9;
+  sConfig.Rank = ADC_REGULAR_RANK_7;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE BEGIN ADC1_Init 2 */
 
   /* USER CODE END ADC1_Init 2 */
@@ -110,19 +137,27 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef* adcHandle)
 
     __HAL_RCC_GPIOC_CLK_ENABLE();
     __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
     /**ADC1 GPIO Configuration
     PC0     ------> ADC1_IN10
     PC1     ------> ADC1_IN11
     PC2     ------> ADC1_IN12
     PA0-WKUP     ------> ADC1_IN0
+    PC5     ------> ADC1_IN15
+    PB0     ------> ADC1_IN8
+    PB1     ------> ADC1_IN9
     */
-    GPIO_InitStruct.Pin = adc1_THERMISTOR1_Pin|adc1_THERMISTOR2_Pin|adc1_THERMISTOR3_Pin;
+    GPIO_InitStruct.Pin = adc1_THERMISTOR1_Pin|adc1_THERMISTOR2_Pin|adc1_THERMISTOR3_Pin|adc1_DC_CURR1_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
     GPIO_InitStruct.Pin = adc1_DISTANCE_SENS_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
     HAL_GPIO_Init(adc1_DISTANCE_SENS_GPIO_Port, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = adc1_DC_CURR2_Pin|adc1_DC_CURR3_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN ADC1_MspInit 1 */
 
@@ -146,10 +181,15 @@ void HAL_ADC_MspDeInit(ADC_HandleTypeDef* adcHandle)
     PC1     ------> ADC1_IN11
     PC2     ------> ADC1_IN12
     PA0-WKUP     ------> ADC1_IN0
+    PC5     ------> ADC1_IN15
+    PB0     ------> ADC1_IN8
+    PB1     ------> ADC1_IN9
     */
-    HAL_GPIO_DeInit(GPIOC, adc1_THERMISTOR1_Pin|adc1_THERMISTOR2_Pin|adc1_THERMISTOR3_Pin);
+    HAL_GPIO_DeInit(GPIOC, adc1_THERMISTOR1_Pin|adc1_THERMISTOR2_Pin|adc1_THERMISTOR3_Pin|adc1_DC_CURR1_Pin);
 
     HAL_GPIO_DeInit(adc1_DISTANCE_SENS_GPIO_Port, adc1_DISTANCE_SENS_Pin);
+
+    HAL_GPIO_DeInit(GPIOB, adc1_DC_CURR2_Pin|adc1_DC_CURR3_Pin);
 
   /* USER CODE BEGIN ADC1_MspDeInit 1 */
 

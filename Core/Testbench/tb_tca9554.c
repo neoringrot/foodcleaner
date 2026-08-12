@@ -15,6 +15,15 @@ volatile tb_tca9554_btn_t tb_btn[TB_TCA9554_BTN_COUNT];
 volatile uint8_t          tb_btn_mask;   /* debounced pressed mask */
 volatile uint8_t          tb_led_mask;   /* current lit-LED mask   */
 
+/* Debug enable (testbench only): keypad-free start/stop of the two motors.
+ * See tb_tca9554.h for the contract. */
+volatile uint8_t tb_grind_en;
+volatile uint8_t tb_grind_rev;
+volatile uint8_t tb_grind_spd_req;
+volatile uint8_t tb_stir_en;
+volatile uint8_t tb_stir_rev;
+volatile uint8_t tb_stir_spd_req;
+
 /* ---- Private state -------------------------------------------------------- */
 static tca9554_t s_sw;    /* U9 - DIS-SW inputs   */
 static tca9554_t s_led;   /* U8 - DIS-LED outputs */
@@ -22,6 +31,10 @@ static tca9554_t s_led;   /* U8 - DIS-LED outputs */
 /* Debounce, per key (P0..P7 of U9). */
 static uint8_t s_cand[TB_TCA9554_BTN_COUNT];   /* candidate level being counted */
 static uint8_t s_cnt[TB_TCA9554_BTN_COUNT];    /* consecutive-sample counter    */
+
+/* Previous tb_*_en level, for edge detection of the debug-enable inputs. */
+static uint8_t s_grind_en_prev;
+static uint8_t s_stir_en_prev;
 
 /* ---- Small helpers -------------------------------------------------------- */
 
@@ -91,6 +104,32 @@ static void handle_press(uint8_t idx)
 	}
 }
 
+/* Apply one motor's debug-enable inputs as if the panel buttons were pressed
+ * (testbench only; called from TB_TCA9554_Poll). Edge-triggered so it mimics a
+ * button press exactly rather than re-issuing Start/Stop every poll:
+ *   en 0->1 : BldcCtrl_Start (dir from *rev)   -- like SW1/SW2 (fwd) / SW5/SW6 (rev)
+ *   en 1->0 : BldcCtrl_Stop                    -- like SW3/SW4
+ *   *spd_req: one BldcCtrl_SpeedStep, self-cleared -- like SW7/SW8
+ * BldcCtrl_Start/Stop enforce the start-only-while-stopped and re-arm rules
+ * internally, so the raw levels here are always safe to act on. */
+static void apply_enable(BldcCtrl_t *c, volatile uint8_t *en, uint8_t *en_prev,
+                         volatile uint8_t *rev, volatile uint8_t *spd_req)
+{
+	uint8_t en_now = (*en) ? 1U : 0U;
+
+	if (en_now && !*en_prev)
+		BldcCtrl_Start(c, (*rev) ? 1U : 0U);   /* rising edge: start */
+	else if (!en_now && *en_prev)
+		BldcCtrl_Stop(c);                      /* falling edge: stop */
+	*en_prev = en_now;
+
+	if (*spd_req)
+	{
+		BldcCtrl_SpeedStep(c);                 /* one rung per request */
+		*spd_req = 0U;
+	}
+}
+
 /* ---- Lifecycle ------------------------------------------------------------ */
 void TB_TCA9554_Init(void)
 {
@@ -119,6 +158,11 @@ void TB_TCA9554_Init(void)
 	if (read_pressed(&seed) != HAL_OK)
 		seed = 0x00U;
 
+	/* Seed debug-enable edge state to the current levels so a variable left set
+	 * from a previous run does not fire a spurious Start/Stop on the first poll. */
+	s_grind_en_prev = tb_grind_en ? 1U : 0U;
+	s_stir_en_prev  = tb_stir_en ? 1U : 0U;
+
 	tb_btn_mask = seed;
 	for (i = 0; i < TB_TCA9554_BTN_COUNT; i++)
 	{
@@ -140,6 +184,13 @@ void TB_TCA9554_Poll(void)
 	uint8_t sample = 0x00U;
 	uint8_t i;
 	uint8_t led_changed = 0U;
+
+	/* Debug-enable inputs (testbench only): drive the motors without the keypad.
+	 * Runs before the bus read so a bus hiccup below does not skip it. */
+	apply_enable(&g_grind_ctrl, &tb_grind_en, &s_grind_en_prev,
+	             &tb_grind_rev, &tb_grind_spd_req);
+	apply_enable(&g_stir_ctrl,  &tb_stir_en,  &s_stir_en_prev,
+	             &tb_stir_rev,  &tb_stir_spd_req);
 
 	if (read_pressed(&sample) != HAL_OK)
 		return;                              /* bus hiccup: skip this cycle */

@@ -16,6 +16,9 @@ volatile uint8_t  tb_step2_dir       = 0;
 volatile uint16_t tb_step2_period_ms = 3;
 volatile uint8_t  tb_step2_hold      = 0;
 
+/* Phase order M1..M4 = connector J31 pins 2..5 = Orange/Yellow/Pink/Blue, which
+ * is the 24BYJ48-895 stator ring order -- matches k_step_seq, so this natural
+ * order rotates. Do NOT reorder (see step_motor.h). */
 static StepMotor_HandleTypeDef step1 =
 {
 	.port = { o_STEP1_M1_GPIO_Port, o_STEP1_M2_GPIO_Port,
@@ -24,6 +27,11 @@ static StepMotor_HandleTypeDef step1 =
 	          o_STEP1_M3_Pin, o_STEP1_M4_Pin },
 };
 
+/* STEP2 = 35BYJ46-1014 (24 V), a DIFFERENT motor than STEP1. Its lead connector
+ * must be re-pinned to RED(common)->J33.pin1, then Orange/Yellow/Blue/Pink on
+ * pins 2..5 (= M1..M4). See step_motor.h: as received the leads were PINK BLUE
+ * ORANGE RED YELLOW (RED wrongly on pin4) -- fix the connector before enabling.
+ * If it only buzzes after re-pinning, swap the pin4/pin5 wires (Blue<->Pink). */
 static StepMotor_HandleTypeDef step2 =
 {
 	.port = { o_STEP2_M1_GPIO_Port, o_STEP2_M2_GPIO_Port,

@@ -58,7 +58,6 @@
 extern TIM_HandleTypeDef htim7;
 extern UART_HandleTypeDef huart4;
 extern UART_HandleTypeDef huart5;
-extern UART_HandleTypeDef huart1;
 extern TIM_HandleTypeDef htim6;
 
 /* USER CODE BEGIN EV */
@@ -171,7 +170,7 @@ void EXTI0_IRQHandler(void)
   /* USER CODE BEGIN EXTI0_IRQn 0 */
 
   /* USER CODE END EXTI0_IRQn 0 */
-  HAL_GPIO_EXTI_IRQHandler(exti0_BIMETAL1_Pin);
+  HAL_GPIO_EXTI_IRQHandler(exti0_BIMETAL_80_Pin);
   /* USER CODE BEGIN EXTI0_IRQn 1 */
 
   /* USER CODE END EXTI0_IRQn 1 */
@@ -185,7 +184,7 @@ void EXTI1_IRQHandler(void)
   /* USER CODE BEGIN EXTI1_IRQn 0 */
 
   /* USER CODE END EXTI1_IRQn 0 */
-  HAL_GPIO_EXTI_IRQHandler(exti1_BIMETAL2_Pin);
+  HAL_GPIO_EXTI_IRQHandler(exti1_BIMETAL_60_Pin);
   /* USER CODE BEGIN EXTI1_IRQn 1 */
 
   /* USER CODE END EXTI1_IRQn 1 */
@@ -199,7 +198,7 @@ void EXTI2_IRQHandler(void)
   /* USER CODE BEGIN EXTI2_IRQn 0 */
 
   /* USER CODE END EXTI2_IRQn 0 */
-  HAL_GPIO_EXTI_IRQHandler(exti2_BIMETAL3_Pin);
+  HAL_GPIO_EXTI_IRQHandler(exti2_THALL_CLOSE_Pin);
   /* USER CODE BEGIN EXTI2_IRQn 1 */
 
   /* USER CODE END EXTI2_IRQn 1 */
@@ -213,7 +212,7 @@ void EXTI3_IRQHandler(void)
   /* USER CODE BEGIN EXTI3_IRQn 0 */
 
   /* USER CODE END EXTI3_IRQn 0 */
-  HAL_GPIO_EXTI_IRQHandler(exti3_BIMETAL4_Pin);
+  HAL_GPIO_EXTI_IRQHandler(exti3_WHALL_CLOSE_Pin);
   /* USER CODE BEGIN EXTI3_IRQn 1 */
 
   /* USER CODE END EXTI3_IRQn 1 */
@@ -227,7 +226,7 @@ void EXTI4_IRQHandler(void)
   /* USER CODE BEGIN EXTI4_IRQn 0 */
 
   /* USER CODE END EXTI4_IRQn 0 */
-  HAL_GPIO_EXTI_IRQHandler(exti4_BIMETAL5_Pin);
+  HAL_GPIO_EXTI_IRQHandler(exti4_WHALL_OPEN_Pin);
   /* USER CODE BEGIN EXTI4_IRQn 1 */
 
   /* USER CODE END EXTI4_IRQn 1 */
@@ -241,26 +240,14 @@ void EXTI9_5_IRQHandler(void)
   /* USER CODE BEGIN EXTI9_5_IRQn 0 */
 
   /* USER CODE END EXTI9_5_IRQn 0 */
-  HAL_GPIO_EXTI_IRQHandler(exti5_LEAD_SW_Pin);
+  HAL_GPIO_EXTI_IRQHandler(exti5_THALL_OPEN_Pin);
   HAL_GPIO_EXTI_IRQHandler(exti6_WATER_SEN1_Pin);
   HAL_GPIO_EXTI_IRQHandler(exti7_WATER_SEN2_Pin);
+  HAL_GPIO_EXTI_IRQHandler(exti8_TIMER_OUT_Pin);
+  HAL_GPIO_EXTI_IRQHandler(exti9_HALL_INT1_Pin);
   /* USER CODE BEGIN EXTI9_5_IRQn 1 */
 
   /* USER CODE END EXTI9_5_IRQn 1 */
-}
-
-/**
-  * @brief This function handles USART1 global interrupt.
-  */
-void USART1_IRQHandler(void)
-{
-  /* USER CODE BEGIN USART1_IRQn 0 */
-
-  /* USER CODE END USART1_IRQn 0 */
-  HAL_UART_IRQHandler(&huart1);
-  /* USER CODE BEGIN USART1_IRQn 1 */
-
-  /* USER CODE END USART1_IRQn 1 */
 }
 
 /**
@@ -271,7 +258,7 @@ void EXTI15_10_IRQHandler(void)
   /* USER CODE BEGIN EXTI15_10_IRQn 0 */
 
   /* USER CODE END EXTI15_10_IRQn 0 */
-  HAL_GPIO_EXTI_IRQHandler(exti11_TIMER_OUT_Pin);
+  HAL_GPIO_EXTI_IRQHandler(exti10_HALL_INT2_Pin);
   HAL_GPIO_EXTI_IRQHandler(exti12_M2_FGOT_Pin);
   HAL_GPIO_EXTI_IRQHandler(exti13_M2_nFAULT_Pin);
   HAL_GPIO_EXTI_IRQHandler(exti14_M1_nFAULT_Pin);

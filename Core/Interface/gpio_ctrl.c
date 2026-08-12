@@ -32,7 +32,6 @@ static const gpio_map_t out_map[GPIO_OUT_COUNT] =
 	[GPIO_OUT_M2_DIR]          = { o_M2_DIR_GPIO_Port,          o_M2_DIR_Pin          },
 	[GPIO_OUT_M1_nBRAKE]       = { o_M1_nBRAKE_GPIO_Port,       o_M1_nBRAKE_Pin       },
 	[GPIO_OUT_M2_nBRAKE]       = { o_M2_nBRAKE_GPIO_Port,       o_M2_nBRAKE_Pin       },
-	[GPIO_OUT_FRAME_WP]        = { o_FRAME_WP_GPIO_Port,        o_FRAME_WP_Pin        },
 	[GPIO_OUT_MTR_DC_LIFT]     = { o_MTR_DC_LIFT_GPIO_Port,     o_MTR_DC_LIFT_Pin     },
 	[GPIO_OUT_VALVE_DRY_IN]    = { o_VALVE_DRY_IN_GPIO_Port,    o_VALVE_DRY_IN_Pin    },
 	[GPIO_OUT_VALVE_DRAIN_CLN] = { o_VALVE_DRAIN_CLN_GPIO_Port, o_VALVE_DRAIN_CLN_Pin },
@@ -47,8 +46,7 @@ static const gpio_map_t out_map[GPIO_OUT_COUNT] =
 	[GPIO_OUT_STEP2_M4]        = { o_STEP2_M4_GPIO_Port,        o_STEP2_M4_Pin        },
 	[GPIO_OUT_BLE_MODE]        = { o_BLE_MODE_GPIO_Port,        o_BLE_MODE_Pin        },
 	[GPIO_OUT_FAN_EXHAUST]     = { o_FAN_EXHAUST_GPIO_Port,     o_FAN_EXHAUST_Pin     },
-	[GPIO_OUT_LIFT_IN1]        = { o_LIFT_IN1_GPIO_Port,        o_LIFT_IN1_Pin        },
-	[GPIO_OUT_LIFT_IN2]        = { o_LIFT_IN2_GPIO_Port,        o_LIFT_IN2_Pin        },
+	[GPIO_OUT_BLDC_FAN]        = { o_BLDC_FAN_GPIO_Port,        o_BLDC_FAN_Pin        },
 };
 
 /* Input pin table - one entry per gpio_in_t enumerator. */
@@ -60,15 +58,17 @@ static const gpio_map_t in_map[GPIO_IN_COUNT] =
 /* EXTI pin table - one entry per gpio_exti_t enumerator. */
 static const gpio_map_t exti_map[GPIO_EXTI_COUNT] =
 {
-	[GPIO_EXTI_BIMETAL1]   = { exti0_BIMETAL1_GPIO_Port,  exti0_BIMETAL1_Pin  },
-	[GPIO_EXTI_BIMETAL2]   = { exti1_BIMETAL2_GPIO_Port,  exti1_BIMETAL2_Pin  },
-	[GPIO_EXTI_BIMETAL3]   = { exti2_BIMETAL3_GPIO_Port,  exti2_BIMETAL3_Pin  },
-	[GPIO_EXTI_BIMETAL4]   = { exti3_BIMETAL4_GPIO_Port,  exti3_BIMETAL4_Pin  },
-	[GPIO_EXTI_BIMETAL5]   = { exti4_BIMETAL5_GPIO_Port,  exti4_BIMETAL5_Pin  },
-	[GPIO_EXTI_LEAD_SW]    = { exti5_LEAD_SW_GPIO_Port,   exti5_LEAD_SW_Pin   },
+	[GPIO_EXTI_BIMETAL_80] = { exti0_BIMETAL_80_GPIO_Port, exti0_BIMETAL_80_Pin },
+	[GPIO_EXTI_BIMETAL_60] = { exti1_BIMETAL_60_GPIO_Port, exti1_BIMETAL_60_Pin },
+	[GPIO_EXTI_THALL_CLOSE]= { exti2_THALL_CLOSE_GPIO_Port,exti2_THALL_CLOSE_Pin},
+	[GPIO_EXTI_WHALL_CLOSE]= { exti3_WHALL_CLOSE_GPIO_Port,exti3_WHALL_CLOSE_Pin},
+	[GPIO_EXTI_WHALL_OPEN] = { exti4_WHALL_OPEN_GPIO_Port, exti4_WHALL_OPEN_Pin },
+	[GPIO_EXTI_THALL_OPEN] = { exti5_THALL_OPEN_GPIO_Port, exti5_THALL_OPEN_Pin },
 	[GPIO_EXTI_WATER_SEN1] = { exti6_WATER_SEN1_GPIO_Port,exti6_WATER_SEN1_Pin},
 	[GPIO_EXTI_WATER_SEN2] = { exti7_WATER_SEN2_GPIO_Port,exti7_WATER_SEN2_Pin},
-	[GPIO_EXTI_TIMER_OUT]  = { exti11_TIMER_OUT_GPIO_Port,exti11_TIMER_OUT_Pin},
+	[GPIO_EXTI_TIMER_OUT]  = { exti8_TIMER_OUT_GPIO_Port, exti8_TIMER_OUT_Pin },
+	[GPIO_EXTI_HALL_INT1]  = { exti9_HALL_INT1_GPIO_Port, exti9_HALL_INT1_Pin },
+	[GPIO_EXTI_HALL_INT2]  = { exti10_HALL_INT2_GPIO_Port,exti10_HALL_INT2_Pin},
 	[GPIO_EXTI_M2_FGOT]    = { exti12_M2_FGOT_GPIO_Port,  exti12_M2_FGOT_Pin  },
 	[GPIO_EXTI_M2_nFAULT]  = { exti13_M2_nFAULT_GPIO_Port,exti13_M2_nFAULT_Pin},
 	[GPIO_EXTI_M1_nFAULT]  = { exti14_M1_nFAULT_GPIO_Port,exti14_M1_nFAULT_Pin},

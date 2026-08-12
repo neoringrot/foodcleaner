@@ -15,9 +15,9 @@ extern "C" {
  * hard-wired to one timer/channel pair:
  *
  *   U5  Water Door : TIM3_CH1/CH2 on PC6/PC7 (tim3_WDOOR_IN1 / tim3_WDDOR_IN2),
- *                    VM gated by o_EN_DOOR_WATER (PF10, net WATER-DOOR-EN)
+ *                    VM gated by o_EN_DOOR_WATER (PE4, net WATER-DOOR-EN)
  *   U7  Trash Door : TIM3_CH3/CH4 on PC8/PC9 (tim3_TDOOR_IN1 / tim3_TDOOR_IN2),
- *                    VM gated by o_EN_DOOR_TRASH (PF9,  net TRASH-DOOR-EN)
+ *                    VM gated by o_EN_DOOR_TRASH (PE3,  net TRASH-DOOR-EN)
  *   U6  Lift       : IN1/IN2 as plain GPIO PG3/PG4 (LIFT-IN1 / LIFT-IN2, NOT
  *                    PWM -- full-speed bang-bang), VM gated by o_MTR_DC_LIFT
  *                    (PB12). Driven by lift_motor.c, not a handle below.

@@ -57,36 +57,45 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define exti0_BIMETAL1_Pin GPIO_PIN_0
-#define exti0_BIMETAL1_GPIO_Port GPIOF
-#define exti0_BIMETAL1_EXTI_IRQn EXTI0_IRQn
-#define exti1_BIMETAL2_Pin GPIO_PIN_1
-#define exti1_BIMETAL2_GPIO_Port GPIOF
-#define exti1_BIMETAL2_EXTI_IRQn EXTI1_IRQn
-#define exti2_BIMETAL3_Pin GPIO_PIN_2
-#define exti2_BIMETAL3_GPIO_Port GPIOF
-#define exti2_BIMETAL3_EXTI_IRQn EXTI2_IRQn
-#define exti3_BIMETAL4_Pin GPIO_PIN_3
-#define exti3_BIMETAL4_GPIO_Port GPIOF
-#define exti3_BIMETAL4_EXTI_IRQn EXTI3_IRQn
-#define exti4_BIMETAL5_Pin GPIO_PIN_4
-#define exti4_BIMETAL5_GPIO_Port GPIOF
-#define exti4_BIMETAL5_EXTI_IRQn EXTI4_IRQn
-#define exti5_LEAD_SW_Pin GPIO_PIN_5
-#define exti5_LEAD_SW_GPIO_Port GPIOF
-#define exti5_LEAD_SW_EXTI_IRQn EXTI9_5_IRQn
+#define o_WATER_ON_Pin GPIO_PIN_2
+#define o_WATER_ON_GPIO_Port GPIOE
+#define o_EN_DOOR_TRASH_Pin GPIO_PIN_3
+#define o_EN_DOOR_TRASH_GPIO_Port GPIOE
+#define o_EN_DOOR_WATER_Pin GPIO_PIN_4
+#define o_EN_DOOR_WATER_GPIO_Port GPIOE
+#define exti0_BIMETAL_80_Pin GPIO_PIN_0
+#define exti0_BIMETAL_80_GPIO_Port GPIOF
+#define exti0_BIMETAL_80_EXTI_IRQn EXTI0_IRQn
+#define exti1_BIMETAL_60_Pin GPIO_PIN_1
+#define exti1_BIMETAL_60_GPIO_Port GPIOF
+#define exti1_BIMETAL_60_EXTI_IRQn EXTI1_IRQn
+#define exti2_THALL_CLOSE_Pin GPIO_PIN_2
+#define exti2_THALL_CLOSE_GPIO_Port GPIOF
+#define exti2_THALL_CLOSE_EXTI_IRQn EXTI2_IRQn
+#define exti3_WHALL_CLOSE_Pin GPIO_PIN_3
+#define exti3_WHALL_CLOSE_GPIO_Port GPIOF
+#define exti3_WHALL_CLOSE_EXTI_IRQn EXTI3_IRQn
+#define exti4_WHALL_OPEN_Pin GPIO_PIN_4
+#define exti4_WHALL_OPEN_GPIO_Port GPIOF
+#define exti4_WHALL_OPEN_EXTI_IRQn EXTI4_IRQn
+#define exti5_THALL_OPEN_Pin GPIO_PIN_5
+#define exti5_THALL_OPEN_GPIO_Port GPIOF
+#define exti5_THALL_OPEN_EXTI_IRQn EXTI9_5_IRQn
 #define exti6_WATER_SEN1_Pin GPIO_PIN_6
 #define exti6_WATER_SEN1_GPIO_Port GPIOF
 #define exti6_WATER_SEN1_EXTI_IRQn EXTI9_5_IRQn
 #define exti7_WATER_SEN2_Pin GPIO_PIN_7
 #define exti7_WATER_SEN2_GPIO_Port GPIOF
 #define exti7_WATER_SEN2_EXTI_IRQn EXTI9_5_IRQn
-#define o_WATER_ON_Pin GPIO_PIN_8
-#define o_WATER_ON_GPIO_Port GPIOF
-#define o_EN_DOOR_TRASH_Pin GPIO_PIN_9
-#define o_EN_DOOR_TRASH_GPIO_Port GPIOF
-#define o_EN_DOOR_WATER_Pin GPIO_PIN_10
-#define o_EN_DOOR_WATER_GPIO_Port GPIOF
+#define exti8_TIMER_OUT_Pin GPIO_PIN_8
+#define exti8_TIMER_OUT_GPIO_Port GPIOF
+#define exti8_TIMER_OUT_EXTI_IRQn EXTI9_5_IRQn
+#define exti9_HALL_INT1_Pin GPIO_PIN_9
+#define exti9_HALL_INT1_GPIO_Port GPIOF
+#define exti9_HALL_INT1_EXTI_IRQn EXTI9_5_IRQn
+#define exti10_HALL_INT2_Pin GPIO_PIN_10
+#define exti10_HALL_INT2_GPIO_Port GPIOF
+#define exti10_HALL_INT2_EXTI_IRQn EXTI15_10_IRQn
 #define adc1_THERMISTOR1_Pin GPIO_PIN_0
 #define adc1_THERMISTOR1_GPIO_Port GPIOC
 #define adc1_THERMISTOR2_Pin GPIO_PIN_1
@@ -107,6 +116,12 @@ void Error_Handler(void);
 #define spi1_EEPROM_MOSI_GPIO_Port GPIOA
 #define o_SPI1_EEPROM_CS_Pin GPIO_PIN_4
 #define o_SPI1_EEPROM_CS_GPIO_Port GPIOC
+#define adc1_DC_CURR1_Pin GPIO_PIN_5
+#define adc1_DC_CURR1_GPIO_Port GPIOC
+#define adc1_DC_CURR2_Pin GPIO_PIN_0
+#define adc1_DC_CURR2_GPIO_Port GPIOB
+#define adc1_DC_CURR3_Pin GPIO_PIN_1
+#define adc1_DC_CURR3_GPIO_Port GPIOB
 #define exti12_M2_FGOT_Pin GPIO_PIN_12
 #define exti12_M2_FGOT_GPIO_Port GPIOF
 #define exti12_M2_FGOT_EXTI_IRQn EXTI15_10_IRQn
@@ -119,6 +134,8 @@ void Error_Handler(void);
 #define exti15_M1_FGOT_Pin GPIO_PIN_15
 #define exti15_M1_FGOT_GPIO_Port GPIOF
 #define exti15_M1_FGOT_EXTI_IRQn EXTI15_10_IRQn
+#define o_BLDC_FAN_Pin GPIO_PIN_1
+#define o_BLDC_FAN_GPIO_Port GPIOG
 #define o_M1_ENABLE_Pin GPIO_PIN_7
 #define o_M1_ENABLE_GPIO_Port GPIOE
 #define o_M2_ENABLE_Pin GPIO_PIN_8
@@ -135,12 +152,6 @@ void Error_Handler(void);
 #define o_M1_nBRAKE_GPIO_Port GPIOE
 #define o_M2_nBRAKE_Pin GPIO_PIN_14
 #define o_M2_nBRAKE_GPIO_Port GPIOE
-#define o_FRAME_WP_Pin GPIO_PIN_15
-#define o_FRAME_WP_GPIO_Port GPIOE
-#define i2c2_FRAME_SCL_Pin GPIO_PIN_10
-#define i2c2_FRAME_SCL_GPIO_Port GPIOB
-#define i2c2_FRAME_SDA_Pin GPIO_PIN_11
-#define i2c2_FRAME_SDA_GPIO_Port GPIOB
 #define o_MTR_DC_LIFT_Pin GPIO_PIN_12
 #define o_MTR_DC_LIFT_GPIO_Port GPIOB
 #define o_VALVE_DRY_IN_Pin GPIO_PIN_13
@@ -167,10 +178,6 @@ void Error_Handler(void);
 #define o_STEP2_M4_GPIO_Port GPIOD
 #define o_FAN_EXHAUST_Pin GPIO_PIN_2
 #define o_FAN_EXHAUST_GPIO_Port GPIOG
-#define o_LIFT_IN1_Pin GPIO_PIN_3
-#define o_LIFT_IN1_GPIO_Port GPIOG
-#define o_LIFT_IN2_Pin GPIO_PIN_4
-#define o_LIFT_IN2_GPIO_Port GPIOG
 #define tim3_WDOOR_IN1_Pin GPIO_PIN_6
 #define tim3_WDOOR_IN1_GPIO_Port GPIOC
 #define tim3_WDDOR_IN2_Pin GPIO_PIN_7
@@ -179,9 +186,6 @@ void Error_Handler(void);
 #define tim3_TDOOR_IN1_GPIO_Port GPIOC
 #define tim3_TDOOR_IN2_Pin GPIO_PIN_9
 #define tim3_TDOOR_IN2_GPIO_Port GPIOC
-#define exti11_TIMER_OUT_Pin GPIO_PIN_11
-#define exti11_TIMER_OUT_GPIO_Port GPIOA
-#define exti11_TIMER_OUT_EXTI_IRQn EXTI15_10_IRQn
 #define o_HT_POWER_Pin GPIO_PIN_12
 #define o_HT_POWER_GPIO_Port GPIOA
 #define uart4_WIFI_TX_Pin GPIO_PIN_10
@@ -196,6 +200,10 @@ void Error_Handler(void);
 #define i_BLE_STATUS_GPIO_Port GPIOD
 #define o_BLE_MODE_Pin GPIO_PIN_4
 #define o_BLE_MODE_GPIO_Port GPIOD
+#define tim4_LIFT_IN1_Pin GPIO_PIN_8
+#define tim4_LIFT_IN1_GPIO_Port GPIOB
+#define tim4_LIFT_IN2_Pin GPIO_PIN_9
+#define tim4_LIFT_IN2_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 

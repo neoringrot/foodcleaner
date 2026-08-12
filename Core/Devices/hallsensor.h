@@ -10,31 +10,34 @@ extern "C" {
 #endif
 
 /* -------------------------------------------------------------------------
- * hallsensor - 7 Hall-effect sensors read through the U10 TCA9554A expander.
+ * hallsensor - 8 Hall-effect sensors read through the U24 TCA9554A expander.
  *
- *   U10 (0x3A)  P0..P6 = HS1..HS7   -> Hall sensor inputs (GPIO input)
- *               P7               = unused (not routed in the netlist)
+ *   U24 (0x3B)  P0..P7 = HS1..HS8   -> Hall sensor inputs (GPIO input)
  *
- * Transport: I2C1 (hi2c1), shared with U8/U9 (see tca9554.h). U10's INT pin is
- * likewise not wired to the MCU, so the sensors are monitored by periodic
- * polling (StartDefaultTask), not a hardware interrupt.
+ * R1 change: the expander (was U10, 7 sensors HS1..HS7 with P7 unused) now
+ * carries 8 sensors HS1..HS8 (P7 = HS8), and its INT pin is wired to the MCU on
+ * PF9 = HALL-INT1 (exti9_HALL_INT1, active-low open-drain). So besides the
+ * periodic poll in StartDefaultTask, an INT falling edge can trigger an
+ * immediate HallSensor_Update() (see the GPIO_EXTI_HALL_INT1 flag). HALL-INT2
+ * (PF10) is routed only to the J15 external test header (U25/U26) and is not
+ * populated on this board.
  *
- * I2C address: per request, U10 is addressed as if its A1 pin were strapped
- * HIGH (A2 A1 A0 = 0 1 0), giving 0x3A on the TCA9554A base 0x38. This ignores
- * the current netlist strap (all address pins to DGND) - fix the PCB strap to
- * match. The address lives in tca9554.h as TCA9554_U10_ADDR.
+ * Transport: I2C1 (hi2c1), shared with U8/U9 (see tca9554.h).
  *
- * Levels: HS1..HS7 map to bit0..bit6 of every mask this module returns.
+ * I2C address: U24 straps A0=A1=HIGH, A2=LOW (A2 A1 A0 = 0 1 1) -> 0x3B on the
+ * TCA9554A base 0x38. The address lives in tca9554.h as TCA9554_U10_ADDR.
+ *
+ * Levels: HS1..HS8 map to bit0..bit7 of every mask this module returns.
  * "Raw" masks are the pin voltages; "detected" masks are polarity-normalised
  * so a set bit always means "magnet present", regardless of the sensor's
  * electrical sense (see HALLSENSOR_ACTIVE_HIGH).
  * ---------------------------------------------------------------------- */
 
-#define HALLSENSOR_COUNT   7U   /* HS1..HS7 on U10 P0..P6 */
+#define HALLSENSOR_COUNT   8U   /* HS1..HS8 on U24 P0..P7 */
 
 /* Electrical sense of an *active* (magnet-present) Hall output on the U10 pin.
  * Open-drain Hall switches usually pull the line LOW when active, so the
- * default is active-low: the driver programs U10's polarity-inversion register
+ * default is active-low: the driver programs U24's polarity-inversion register
  * so a detected magnet still reads as logical 1. Set to 1 if the sensors drive
  * the pin HIGH when active. */
 #ifndef HALLSENSOR_ACTIVE_HIGH
@@ -42,11 +45,11 @@ extern "C" {
 #endif
 
 /* ---- Lifecycle ------------------------------------------------------- */
-/* Configure U10 as all-inputs (HS1..7 + the unused P7) and, for active-low
+/* Configure U24 as all-inputs (HS1..8) and, for active-low
  * sensors, set the polarity-inversion register so reads are normalised.
- * Returns HAL_OK only if U10 initialises on the bus. */
+ * Returns HAL_OK only if U24 initialises on the bus. */
 HAL_StatusTypeDef HallSensor_Init(void);
-uint8_t           HallSensor_IsPresent(void);   /* 1 = U10 ACKs on the bus */
+uint8_t           HallSensor_IsPresent(void);   /* 1 = U24 ACKs on the bus */
 
 /* ---- Read ------------------------------------------------------------ */
 /* Detected mask (bit i = HSi+1 magnet present), polarity already applied.
@@ -60,7 +63,12 @@ HAL_StatusTypeDef HallSensor_ReadRaw(uint8_t *mask);  /* raw U10 input port */
  * the polling loop; call the getters from anywhere. */
 HAL_StatusTypeDef HallSensor_Update(void);
 uint8_t           HallSensor_GetMask(void);        /* last detected mask     */
-uint8_t           HallSensor_Get(uint8_t idx);     /* idx 0..6 -> 0/1        */
+uint8_t           HallSensor_Get(uint8_t idx);     /* idx 0..7 -> 0/1        */
+
+/* INT-driven refresh: if the U24 INT flag (GPIO_EXTI_HALL_INT1, PF9) is set,
+ * do one HallSensor_Update() and clear the flag. Returns 1 if a refresh ran.
+ * Safe to call every loop; it is a no-op until the next INT edge. */
+uint8_t           HallSensor_ServiceInt(void);
 
 #ifdef __cplusplus
 }

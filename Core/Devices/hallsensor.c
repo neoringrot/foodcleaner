@@ -1,11 +1,12 @@
 #include "hallsensor.h"
+#include "gpio_ctrl.h"
 
-/* 7 Hall sensors on the U10 TCA9554A (I2C1). See hallsensor.h for wiring,
+/* 8 Hall sensors on the U24 TCA9554A (I2C1). See hallsensor.h for wiring,
  * address and polarity notes. */
 
-#define HALLSENSOR_MASK   0x7FU   /* HS1..HS7 = P0..P6; P7 unused, masked off */
+#define HALLSENSOR_MASK   0xFFU   /* HS1..HS8 = P0..P7 */
 
-static tca9554_t s_dev;           /* U10 - HS inputs */
+static tca9554_t s_dev;           /* U24 - HS inputs */
 static uint8_t   s_mask;          /* last detected (polarity-applied) mask */
 
 HAL_StatusTypeDef HallSensor_Init(void)
@@ -14,7 +15,7 @@ HAL_StatusTypeDef HallSensor_Init(void)
 
 	s_mask = 0x00U;
 
-	/* U10: all pins inputs (HS1..7 + unused P7). */
+	/* U24: all 8 pins inputs (HS1..8). */
 	st = TCA9554_Init(&s_dev, &hi2c1, TCA9554_U10_ADDR,
 	                  TCA9554_ALL_INPUTS, 0x00U);
 	if (st != HAL_OK)
@@ -91,4 +92,17 @@ uint8_t HallSensor_Get(uint8_t idx)
 	if (idx >= HALLSENSOR_COUNT)
 		return 0U;
 	return (uint8_t)((s_mask >> idx) & 1U);
+}
+
+uint8_t HallSensor_ServiceInt(void)
+{
+	/* U24 pulls HALL-INT1 (PF9) low on any input change; the EXTI falling-edge
+	 * flag is latched by gpio_ctrl_exti_dispatch(). Reading the input port in
+	 * HallSensor_Update() releases the INT line for the next change. */
+	if (!gpio_ctrl_exti_flag_get(GPIO_EXTI_HALL_INT1))
+		return 0U;
+
+	gpio_ctrl_exti_flag_clear(GPIO_EXTI_HALL_INT1);
+	(void)HallSensor_Update();
+	return 1U;
 }

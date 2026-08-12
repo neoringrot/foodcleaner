@@ -7,8 +7,13 @@
 extern "C" {
 #endif
 
-/* Testbed for the two 4-phase unipolar steppers (STEP1 PD8..11 / STEP2 PD12..15,
- * driven through Q5..8 / Q9..12). Mirrors tb_drv8871's live-switch style.
+/* Testbed for the two 4-phase unipolar steppers (both 24 V, but DIFFERENT parts):
+ *   STEP1 = 24BYJ48-895 : PD8..11  -> Q33/Q32/Q31/Q30 -> connector J31
+ *   STEP2 = 35BYJ46-1014: PD12..15 -> Q41/Q40/Q39/Q38 -> connector J33
+ * Phase M1..M4 = connector pins 2..5. STEP1 colors Orange/Yellow/Pink/Blue;
+ * STEP2 requires re-pinning (RED->pin1, then Orange/Yellow/Blue/Pink) before use.
+ * See step_motor.h for the full wiring + excitation-sequence rationale.
+ * Mirrors tb_drv8871's live-switch style.
  *
  * Usage (e.g. from StartDefaultTask in freertos.c):
  *     TB_StepMotor_Init();

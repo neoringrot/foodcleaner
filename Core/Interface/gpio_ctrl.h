@@ -40,9 +40,9 @@ extern "C" {
 /* ---- Output pins (o_* nets, GPIO_MODE_OUTPUT_PP) --------------------- */
 typedef enum
 {
-	GPIO_OUT_WATER_ON = 0,   /* PF8  - o_WATER_ON        */
-	GPIO_OUT_EN_DOOR_TRASH,  /* PF9  - o_EN_DOOR_TRASH   */
-	GPIO_OUT_EN_DOOR_WATER,  /* PF10 - o_EN_DOOR_WATER   */
+	GPIO_OUT_WATER_ON = 0,   /* PE2  - o_WATER_ON        */
+	GPIO_OUT_EN_DOOR_TRASH,  /* PE3  - o_EN_DOOR_TRASH   */
+	GPIO_OUT_EN_DOOR_WATER,  /* PE4  - o_EN_DOOR_WATER   */
 	GPIO_OUT_EN_SPK,         /* PA3  - o_EN_SPK          */
 	GPIO_OUT_HT_POWER,       /* PA12 - o_HT_POWER        */
 	GPIO_OUT_SPI1_EEPROM_CS, /* PC4  - o_SPI1_EEPROM_CS  */
@@ -52,7 +52,6 @@ typedef enum
 	GPIO_OUT_M2_DIR,         /* PE12 - o_M2_DIR          */
 	GPIO_OUT_M1_nBRAKE,      /* PE13 - o_M1_nBRAKE (act.low) */
 	GPIO_OUT_M2_nBRAKE,      /* PE14 - o_M2_nBRAKE (act.low) */
-	GPIO_OUT_FRAME_WP,       /* PE15 - o_FRAME_WP        */
 	GPIO_OUT_MTR_DC_LIFT,    /* PB12 - o_MTR_DC_LIFT     */
 	GPIO_OUT_VALVE_DRY_IN,   /* PB13 - o_VALVE_DRY_IN    */
 	GPIO_OUT_VALVE_DRAIN_CLN,/* PB14 - o_VALVE_DRAIN_CLN */
@@ -67,8 +66,9 @@ typedef enum
 	GPIO_OUT_STEP2_M4,       /* PD15 - o_STEP2_M4        */
 	GPIO_OUT_BLE_MODE,       /* PD4  - o_BLE_MODE        */
 	GPIO_OUT_FAN_EXHAUST,    /* PG2  - o_FAN_EXHAUST     */
-	GPIO_OUT_LIFT_IN1,       /* PG3  - o_LIFT_IN1        */
-	GPIO_OUT_LIFT_IN2,       /* PG4  - o_LIFT_IN2        */
+	GPIO_OUT_BLDC_FAN,       /* PG1  - o_BLDC_FAN (R1 new) */
+	/* R1: o_FRAME_WP (FRAM) removed; o_LIFT_IN1/IN2 moved to TIM4 PWM
+	 * (PB8/PB9) -> now owned by lift_motor.c, no longer plain GPIO. */
 	GPIO_OUT_COUNT           /* keep last */
 } gpio_out_t;
 
@@ -82,20 +82,22 @@ typedef enum
 /* ---- EXTI pins (exti_* nets, GPIO_MODE_IT_FALLING) ------------------- */
 typedef enum
 {
-	GPIO_EXTI_BIMETAL1 = 0,  /* PF0  - exti0_BIMETAL1       */
-	GPIO_EXTI_BIMETAL2,      /* PF1  - exti1_BIMETAL2       */
-	GPIO_EXTI_BIMETAL3,      /* PF2  - exti2_BIMETAL3       */
-	GPIO_EXTI_BIMETAL4,      /* PF3  - exti3_BIMETAL4       */
-	GPIO_EXTI_BIMETAL5,      /* PF4  - exti4_BIMETAL5       */
-	GPIO_EXTI_LEAD_SW,       /* PF5  - exti5_LEAD_SW        */
-	GPIO_EXTI_WATER_SEN1,    /* PF6  - exti6_WATER_SEN1     */
-	GPIO_EXTI_WATER_SEN2,    /* PF7  - exti7_WATER_SEN2     */
-	GPIO_EXTI_TIMER_OUT,     /* PA11 - exti11_TIMER_OUT     */
-	GPIO_EXTI_M2_FGOT,       /* PF12 - exti12_M2_FGOT       */
-	GPIO_EXTI_M2_nFAULT,     /* PF13 - exti13_M2_nFAULT     */
-	GPIO_EXTI_M1_nFAULT,     /* PF14 - exti14_M1_nFAULT     */
-	GPIO_EXTI_M1_FGOT,       /* PF15 - exti15_M1_FGOT       */
-	GPIO_EXTI_COUNT          /* keep last */
+	GPIO_EXTI_BIMETAL_80 = 0, /* PF0  - exti0_BIMETAL_80 (80C bimetal)   */
+	GPIO_EXTI_BIMETAL_60,     /* PF1  - exti1_BIMETAL_60 (60C bimetal)   */
+	GPIO_EXTI_THALL_CLOSE,    /* PF2  - exti2_THALL_CLOSE (R1: was BIMETAL3) */
+	GPIO_EXTI_WHALL_CLOSE,    /* PF3  - exti3_WHALL_CLOSE (R1: was BIMETAL4) */
+	GPIO_EXTI_WHALL_OPEN,     /* PF4  - exti4_WHALL_OPEN  (R1: was BIMETAL5) */
+	GPIO_EXTI_THALL_OPEN,     /* PF5  - exti5_THALL_OPEN  (R1: was LEAD_SW)  */
+	GPIO_EXTI_WATER_SEN1,     /* PF6  - exti6_WATER_SEN1     */
+	GPIO_EXTI_WATER_SEN2,     /* PF7  - exti7_WATER_SEN2     */
+	GPIO_EXTI_TIMER_OUT,      /* PF8  - exti8_TIMER_OUT (R1: moved from PA11) */
+	GPIO_EXTI_HALL_INT1,      /* PF9  - exti9_HALL_INT1 (R1 new, TCA9554 INT, act.low) */
+	GPIO_EXTI_HALL_INT2,      /* PF10 - exti10_HALL_INT2 (R1 new, TCA9554 INT, act.low) */
+	GPIO_EXTI_M2_FGOT,        /* PF12 - exti12_M2_FGOT       */
+	GPIO_EXTI_M2_nFAULT,      /* PF13 - exti13_M2_nFAULT     */
+	GPIO_EXTI_M1_nFAULT,      /* PF14 - exti14_M1_nFAULT     */
+	GPIO_EXTI_M1_FGOT,        /* PF15 - exti15_M1_FGOT       */
+	GPIO_EXTI_COUNT           /* keep last */
 } gpio_exti_t;
 
 /* ---- Output control -------------------------------------------------- */

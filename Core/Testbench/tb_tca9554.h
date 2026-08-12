@@ -108,6 +108,25 @@ extern volatile tb_tca9554_btn_t tb_btn[TB_TCA9554_BTN_COUNT];
 extern volatile uint8_t tb_btn_mask;   /* pressed keys  */
 extern volatile uint8_t tb_led_mask;   /* lit LEDs      */
 
+/* ---- Debug enable (TESTBENCH ONLY) ---------------------------------------
+ * Drive the grinder (M1) / stirrer (M2) WITHOUT the panel keypad: write these
+ * from the debugger (or code) and TB_TCA9554_Poll() applies them exactly as if
+ * the matching button had been pressed. They are ignored outside testbench mode
+ * because Poll() only runs in MotorTask_RunTestbench().
+ *
+ *   tb_*_en     : level. 0 -> 1 edge = START (like SW1/SW2, dir from tb_*_rev),
+ *                        1 -> 0 edge = STOP  (like SW3/SW4). Reflects intent, not
+ *                        live running state (a jam soft-lock can stop the motor
+ *                        while this stays 1; clear to 0 then back to 1 to retry).
+ *   tb_*_rev    : direction sampled at the START edge. 0 = forward/CW, 1 = rev/CCW.
+ *   tb_*_spd_req: write 1 to advance one speed rung (like SW7/SW8); auto-clears. */
+extern volatile uint8_t tb_grind_en;       /* M1 grinder: 1 = run, 0 = stop     */
+extern volatile uint8_t tb_grind_rev;      /* M1 start direction (0 fwd, 1 rev)  */
+extern volatile uint8_t tb_grind_spd_req;  /* M1 speed-step request (self-clears)*/
+extern volatile uint8_t tb_stir_en;        /* M2 stirrer: 1 = run, 0 = stop      */
+extern volatile uint8_t tb_stir_rev;       /* M2 start direction (0 fwd, 1 rev)  */
+extern volatile uint8_t tb_stir_spd_req;   /* M2 speed-step request (self-clears)*/
+
 /* ---- Lifecycle ------------------------------------------------------------ */
 /* Bring up U9 (all inputs) and U8 (all outputs, all LEDs lit), seed debounce,
  * and reset both motors' speed ladder to the start duty. Call once, after

@@ -103,19 +103,24 @@ int main(void)
   MX_ADC1_Init();
   MX_DAC_Init();
   MX_I2C1_Init();
-  MX_I2C2_Init();
   MX_SPI1_Init();
   MX_TIM1_Init();
   MX_UART4_Init();
   MX_UART5_Init();
-  MX_USART1_UART_Init();
   MX_TIM7_Init();
   MX_TIM3_Init();
+  MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
 
-  /* U6 Lift DRV8871 -- IN1/IN2 on PG3/PG4 are plain GPIO (no timer), so unlike
-   * the TIM3 doors (U5/U7) this device is a GPIO-only driver. Bring it to a
-   * safe state (VM off, coast) before the scheduler starts. */
+  /* Door-EN outputs are on PE3 (o_EN_DOOR_TRASH) / PE4 (o_EN_DOOR_WATER) --
+   * ordinary GPIO, no AFIO remap needed. (R1 net-list routes these two signals
+   * to the OSC_IN/OSC_OUT pins, which are dedicated oscillator pins on the
+   * STM32F103ZET6 LQFP144 and cannot be GPIO; the board reroutes them to
+   * PE3/PE4.) */
+
+  /* U6 Lift DRV8871 -- IN1/IN2 now on PB8/PB9 = TIM4_CH3/CH4 (R1), so the lift
+   * is a TIM4 PWM driver like the TIM3 doors (U5/U7). Bring it to a safe state
+   * (VM off, coast) before the scheduler starts. */
   Lift_Init();
 
   /* Comms modules: arm the UART RX interrupts before the scheduler starts.

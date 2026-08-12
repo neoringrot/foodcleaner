@@ -1,12 +1,13 @@
 #include "tdoor.h"
+#include "gpio_ctrl.h"
 
-/* U7 Trash Door: TIM3 CH3/CH4, VM enable on o_EN_DOOR_TRASH (PF9). */
+/* U7 Trash Door: TIM3 CH3/CH4, VM enable on o_EN_DOOR_TRASH (PE3). */
 static DRV8871_HandleTypeDef tdoor =
 {
 	.htim    = &htim3,
 	.in1_ch  = TIM_CHANNEL_3,             /* PC8 tim3_TDOOR_IN1 */
 	.in2_ch  = TIM_CHANNEL_4,             /* PC9 tim3_TDOOR_IN2 */
-	.en_port = o_EN_DOOR_TRASH_GPIO_Port, /* PF9                */
+	.en_port = o_EN_DOOR_TRASH_GPIO_Port, /* PE3                */
 	.en_pin  = o_EN_DOOR_TRASH_Pin,
 };
 
@@ -45,4 +46,16 @@ void TDoor_Brake(void)
 void TDoor_Stop(void)
 {
 	DRV8871_Coast(&tdoor);
+}
+
+/* Door has reached the limit when the Hall pin sits at its asserted level
+ * (DOOR_LIMIT_ACTIVE_HIGH; default 0 = active-low, see tdoor.h). */
+uint8_t TDoor_AtOpen(void)
+{
+	return (gpio_ctrl_exti_read(GPIO_EXTI_THALL_OPEN) == DOOR_LIMIT_ACTIVE_HIGH) ? 1U : 0U;
+}
+
+uint8_t TDoor_AtClose(void)
+{
+	return (gpio_ctrl_exti_read(GPIO_EXTI_THALL_CLOSE) == DOOR_LIMIT_ACTIVE_HIGH) ? 1U : 0U;
 }

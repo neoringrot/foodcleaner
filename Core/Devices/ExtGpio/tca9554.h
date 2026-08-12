@@ -17,7 +17,7 @@ extern "C" {
  * 4.7k pull-ups (R53/R54). Three expanders share the bus: U8, U9, U10.
  *   U8  P0..P7 -> DIS-LED1..8   (outputs, front-panel LEDs)
  *   U9  P0..P7 -> DIS-SW1..8    (inputs,  membrane keypad switches)
- *   U10 P0..P7 -> other I/O     (not handled here)
+ *   U24 P0..P7 -> HS1..HS8 hall sensors (see hallsensor.c)
  *
  * IMPORTANT - part variant / address:
  *   The parts fitted are TCA9554A (marking "TCA9554APWR" in the netlist), whose

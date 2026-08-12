@@ -1,21 +1,23 @@
 #ifndef DEVICES_LIFT_H_
 #define DEVICES_LIFT_H_
 
-#include "gpio_ctrl.h"
+#include "drv8871.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* U6 -- Lift DRV8871 (schematic net "LIFT"). Unlike U5 (wdoor) and U7 (tdoor),
- * whose IN1/IN2 sit on TIM3 channels (PC6/PC7, PC8/PC9) and are PWM-driven, the
- * lift's IN pins are on PG3/PG4, which have NO timer channel. So this driver
- * toggles IN1/IN2 as plain GPIO (gpio_ctrl, GPIO_MODE_OUTPUT_PP) rather than
- * PWM -- full-speed only, no duty/speed control.
+/* U6 -- Lift DRV8871 (schematic net "LIFT").
  *
- *   IN1 = PG3  o_LIFT_IN1     (net LIFT-IN1)
- *   IN2 = PG4  o_LIFT_IN2     (net LIFT-IN2)
- *   EN  = PB12 o_MTR_DC_LIFT  (net MTR-DC-LIFT)
+ * R1 change: the lift's IN1/IN2 moved from PG3/PG4 (which had NO timer channel,
+ * so the old build drove them as plain GPIO -- full-speed only) to PB8/PB9 =
+ * TIM4_CH3/CH4. The lift is now a TIM4 PWM driver, identical in structure to the
+ * TIM3 doors (U5 wdoor, U7 tdoor), so it shares the DRV8871 20 kHz PWM engine
+ * and gains open-loop speed control.
+ *
+ *   IN1 = PB8  tim4_LIFT_IN1  = TIM4_CH3   (net LIFT-IN1)
+ *   IN2 = PB9  tim4_LIFT_IN2  = TIM4_CH4   (net LIFT-IN2)
+ *   EN  = PB12 o_MTR_DC_LIFT              (net MTR-DC-LIFT)
  *
  * DRV8871 IN1/IN2 truth table (datasheet Table 1):
  *   IN1  IN2  OUT1  OUT2  Mode
@@ -29,14 +31,21 @@ extern "C" {
  * non-inverting: EN HIGH switches 24V onto VM, EN LOW removes it. Drive VM on
  * before commanding a direction and off after stopping.
  *
- * Up/Down direction is provisional -- swap the two bodies in lift.c if the lift
- * runs the wrong way on the bench. */
+ * The public API keeps the original no-argument shape (full-speed Up/Down); it
+ * now routes through the TIM4 PWM channels at 100% duty, behaviourally identical
+ * to the old GPIO drive. Use Lift_UpSpeed()/Lift_DownSpeed() for open-loop speed
+ * control (0-100%).
+ *
+ * Up/Down direction is provisional -- swap the two bodies in lift_motor.c if the
+ * lift runs the wrong way on the bench. */
 
 void Lift_Init(void);
 void Lift_Enable(void);   /* switch 24V onto VM */
 void Lift_Disable(void);  /* remove VM          */
-void Lift_Up(void);
-void Lift_Down(void);
+void Lift_Up(void);       /* forward, full speed */
+void Lift_Down(void);     /* reverse, full speed */
+void Lift_UpSpeed(uint8_t duty_pct);   /* forward at 0-100% */
+void Lift_DownSpeed(uint8_t duty_pct); /* reverse at 0-100% */
 void Lift_Brake(void);
 void Lift_Stop(void);     /* coast */
 

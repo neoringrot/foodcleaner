@@ -45,7 +45,7 @@ extern volatile uint8_t tb_therm_enable;
  *   tb_therm_c_inst - INSTANTANEOUS (unfiltered) Celsius   (NAN on error)
  * tb_therm_c is the EMA-smoothed value the whole system uses (== g_therm_c_d10);
  * tb_therm_c_inst is a raw comparison read. The smoothing weight is the shared
- * g_therm_filter_alpha (thermistor.h, default 0.3) -- tune it live to taste. */
+ * g_therm_filter_alpha (thermistor.h, default 0.4) -- tune it live to taste. */
 extern volatile uint16_t tb_therm_raw[THERMISTOR_COUNT];
 extern volatile float    tb_therm_c[THERMISTOR_COUNT];
 extern volatile int16_t  tb_therm_c_d10[THERMISTOR_COUNT];

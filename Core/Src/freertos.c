@@ -34,16 +34,23 @@
 #include "tb_gpioout.h"
 #include "distance.h"
 #include "tb_distance.h"
-#include "membrane.h"
 #include "hallsensor.h"
 #include "tb_hallsensor.h"
 #include "adc_ctrl.h"
 #include "thermistor.h"
 #include "tb_thermistor.h"
+#include "tb_heat.h"
 #include "tb_speaker.h"
 #include "tb_water.h"
+#include "tb_doorhall.h"
 #include "moeum.h"
 #include "dongjak.h"
+#include "kangeum.h"
+#include "baesu.h"
+#include "jungji.h"
+#include "mode_arbiter.h"
+#include "protocol_r0.h"
+#include "tb_protocol.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -75,19 +82,21 @@ volatile int16_t  g_therm_c_d10[THERMISTOR_COUNT] = {0};
  * HallSensor_Get(). */
 volatile uint8_t  g_hall_mask     = 0;   /* HS1..8 detected mask [bit0..7] */
 
-/* Runtime app mode: choose whether the two RTOS tasks run the debug TESTBENCH
- * (default, keypad/debugger-driven individual motors) or a SCENARIO (e.g. the
- * "모음" rinse state machine in Core/Scenario/moeum.c). They cannot run at once
- * because they share g_stir_ctrl (M2) and the WDoor motor, so each task branches
- * on this flag. Flip it in the debugger (or from a future UI) to switch modes;
- * the switch is made safe by stopping all motors on the transition edge. */
-typedef enum
-{
-	APP_MODE_TESTBENCH = 0,   /* TB_*_Poll + keypad-driven BLDC (original)   */
-	APP_MODE_MOEUM     = 1,   /* moeum rinse scenario state machine          */
-	APP_MODE_DONGJAK   = 2    /* dongjak dry/grind/discharge scenario        */
-} app_mode_t;
-volatile app_mode_t g_app_mode = APP_MODE_TESTBENCH;
+/* Runtime app mode: which of the mutually exclusive halves the two RTOS tasks
+ * run -- the debug TESTBENCH (keypad/debugger-driven individual motors) or one
+ * of the scenarios (모음 / 동작 / 강음 / 배수). They cannot run at once because
+ * they share g_stir_ctrl (M2), the grinder and the doors, so each task branches
+ * on this flag.
+ *
+ * OWNERSHIP MOVED (R1): app_mode_t and g_app_mode now live in
+ * Core/Scenario/mode_arbiter.c. The arbiter decodes the lid-position Hall
+ * sensors HS1..HS5 every 100 ms REGARDLESS of the current mode and is the only
+ * writer of g_app_mode, so turning the lid cap actually starts/stops a scenario
+ * (previously the trigger was gated behind the very mode it was supposed to
+ * select, so only a debugger write could switch modes). The mode-transition
+ * cleanup that used to live in StartMotorTask below now runs inside
+ * ModeArbiter_MotorTick() -> Jungji_StopAll(), which also fixes the ordering
+ * bug where the transition Abort() wiped a freshly latched start_req. */
 
 /* Motor control service thread. Owns all motor testbeds -- DRV8871 doors (U5/
  * U7), steppers STEP1/STEP2, DRV8306 BLDC (U11/U16) and the U6 lift -- so motor
@@ -185,6 +194,11 @@ void StartDefaultTask(void *argument)
   TB_Distance_Init();     /* enable-gated Distance-SEN monitor (defaultTask owns ADC1) */
   Thermistor_Init();
   TB_Thermistor_Init();   /* enable-gated thermistor monitor (defaultTask owns ADC1) */
+  /* Heater (HT-POWER PA12) testbed. Reads the smoothed thermistor value cached
+   * by Thermistor_Tick() and closes the 동작 190/195C hysteresis loop, so the
+   * NTC probe is in the loop. Starts disabled/off; only drives the pin while in
+   * TESTBENCH mode so it never fights the 동작 scenario over HT-POWER. */
+  TB_Heat_Init();
   /* Hall sensors HS1..8 on the U24 TCA9554A (I2C1). MX_I2C1_Init() already ran
    * in main() before the scheduler, so the bus is up. U24's INT is wired to PF9
    * (HALL-INT1): the loop services that edge via HallSensor_ServiceInt() and
@@ -198,10 +212,21 @@ void StartDefaultTask(void *argument)
    * (PF6/PF7 EXTI). Enable-gated; plain GPIO + EXTI-flag reads, so it is safe on
    * this task, which already polls the EXTI flags. */
   TB_Water_Init();        /* enable-gated water supply + level-sensor monitor (set tb_water_enable=1) */
-  /* Membrane keypad (U8/U9 TCA9554A on I2C1). Membrane_Init() already ran in
-   * main() after MX_I2C1_Init, so this loop only polls for debounced edges.
-   * NOTE: polling now shares the 100 ms sensor cadence instead of the former
-   * ~MEMBRANE_POLL_MS thread; keypad response is coarser but code is simpler. */
+  /* Door-limit Hall monitor: WHALL/THALL open/close (PF3/PF4/PF2/PF5 EXTI) that
+   * gate the WDoor/TDoor transitions in the 모음/동작 scenarios. Enable-gated,
+   * input-only (reuses WDoor_/TDoor_At* decode), so it is safe on this task and
+   * never fights a scenario. */
+  TB_DoorHall_Init();     /* enable-gated door-limit Hall monitor (set tb_doorhall_enable=1) */
+  /* R0 protocol self-test. Pure in-memory encode/decode round trip -- it never
+   * touches UART5 or the motors, so it is safe to run with the app connected
+   * and a scenario in progress. Set tb_proto_run_once=1 in the debugger for a
+   * single pass and read tb_proto_fails (0 = OK). See tb_protocol.h. */
+  TB_Protocol_Init();
+  /* NOTE: the front-panel keypad (U8/U9 TCA9554A on I2C1) is NOT serviced from
+   * this task. The generic membrane driver was removed on 2026-08-18 (the
+   * product controls nothing from those buttons); the only U8/U9 owner left is
+   * the tb_tca9554 testbed on StartMotorTask, kept for bench motor driving in
+   * APP_MODE_TESTBENCH. */
   for(;;)
   {
     g_distance_mm  = Distance_ReadMm();
@@ -226,6 +251,13 @@ void StartDefaultTask(void *argument)
      * Safe here because this task is the sole ADC1 owner. */
     TB_Thermistor_Poll();
 
+    /* Enable-gated heater testbed (HT-POWER PA12): set tb_heat_enable=1 in the
+     * debugger to close the hysteresis loop (or MANUAL-force the pin) using the
+     * smoothed temperature published just above. Passing testbench-active gates
+     * it so it only drives HT-POWER outside the 동작 scenario, which otherwise
+     * owns the pin from StartMotorTask. */
+    TB_Heat_Poll((uint8_t)(g_app_mode == APP_MODE_TESTBENCH));
+
     /* Refresh the HS1..8 snapshot (bit i = HS(i+1) magnet present). U24 pulls
      * HALL-INT1 (PF9) low on any change; service that edge first for low
      * latency, then do the periodic read as a safety net for missed edges. */
@@ -248,27 +280,55 @@ void StartDefaultTask(void *argument)
 
     /* Enable-gated water testbed: set tb_water_enable=1 in the debugger to open
      * WATER-ON and refresh tb_water_sen1/2_level/_present/_events, 0 to shut the
-     * supply off. Reads the shared EXTI flags polled/cleared on this task. */
-    TB_Water_Poll();
+     * supply off. Reads the shared EXTI flags polled/cleared on this task.
+     * Gated like TB_Heat_Poll: WATER-ON (PE2) is also driven by the Moeum/Dongjak
+     * scenarios from StartMotorTask, so the bench only touches it when idle. */
+    TB_Water_Poll((uint8_t)(g_app_mode == APP_MODE_TESTBENCH));
 
-    /* Membrane_Poll() is DISABLED while the tb_tca9554 keypad testbed owns
-     * U8/U9 (it drives the LEDs and BLDC motors from the same expanders and
-     * would fight this driver over the LED port / I2C bus). Re-enable this and
-     * Membrane_Init() in main.c if you drop that testbed. */
-    /* (void)Membrane_Poll(); */
+    /* Enable-gated door-limit Hall monitor (testbed): set tb_doorhall_enable=1 in
+     * the debugger to refresh tb_wdoor_at_open/close, tb_tdoor_at_open/close,
+     * raw levels and falling-edge counts, 0 to stop. Input-only; reads the shared
+     * EXTI flags this task already polls. */
+    TB_DoorHall_Poll();
 
-    /* Scenario sensing half. In moeum mode this reads the start button (HS2)
-     * and the water-level sensors off the snapshots refreshed above; the motor
-     * half of the scenario runs in StartMotorTask. Sensor-only, so it belongs
-     * on this 100 ms cadence and never touches a motor. */
-    if (g_app_mode == APP_MODE_MOEUM)
+    /* Mode arbiter. Runs on EVERY cycle, in every mode: it decodes the lid
+     * position from the HS1..HS5 snapshot refreshed just above and decides the
+     * mode (HS2 모음 / HS5 동작 / HS1 강음 / HS4 배수) or requests a stop
+     * (HS3 정지, or the lid leaving every position). It only latches requests
+     * here; the switch itself is executed by ModeArbiter_MotorTick() on the
+     * motor task. Must come AFTER HallSensor_Update() so it sees this cycle's
+     * mask. */
+    ModeArbiter_SenseTick();
+
+    /* Scenario sensing half. Sensor-only (water level, temperature, bin fill,
+     * debug force-start), so it belongs on this 100 ms cadence and never
+     * touches a motor. The start trigger itself is no longer read here -- the
+     * arbiter above owns it. */
+    switch (g_app_mode)
     {
-      Moeum_SenseTick();
+      case APP_MODE_MOEUM:   Moeum_SenseTick();   break;
+      case APP_MODE_DONGJAK: Dongjak_SenseTick(); break;
+      case APP_MODE_KANGEUM: Kangeum_SenseTick(); break;   /* 미구현 스텁 */
+      case APP_MODE_BAESU:   Baesu_SenseTick();   break;   /* 미구현 스텁 */
+      case APP_MODE_TESTBENCH:
+      default:                                    break;
     }
-    else if (g_app_mode == APP_MODE_DONGJAK)
-    {
-      Dongjak_SenseTick();
-    }
+
+    /* App-facing R0 protocol service (UART5 via the BLE module in BYPASS).
+     * Drains the uart_ctrl RX ring, answers R/W frames, and pushes the M
+     * (monitoring) packets for 모음/동작. Must come AFTER the sensor reads and
+     * the scenario SenseTick above so a packet carries THIS cycle's snapshot.
+     * Sensor-only + queued TX (never blocks on the UART), so it belongs on this
+     * task; scenario-control writes must latch a request for MotorTask instead
+     * of driving anything here. */
+    Proto_Tick(HAL_GetTick());
+
+    /* Enable-gated R0 protocol self-test: set tb_proto_run_once=1 (single pass)
+     * or tb_proto_enable=1 (repeating) in the debugger, then read tb_proto_fails
+     * / tb_proto_first_fail. ~1-2 ms per pass; uses only its own buffers, so it
+     * cannot disturb Proto_Tick above. */
+    TB_Protocol_Poll();
+
     osDelay(100);
   }
   /* USER CODE END StartDefaultTask */
@@ -303,7 +363,14 @@ static void MotorTask_RunTestbench(uint32_t now_ms)
 {
   TB_DRV8871_Poll();
   TB_StepMotor_Poll();
-  TB_TCA9554_Poll();
+  /* Keypad -> BldcCtrl_Start(). Suppressed while the emergency short brake is
+   * held: BldcCtrl_Start() releases nBRAKE and wakes the driver, so a keypress
+   * landing inside the JUNGJI_BRAKE_MS window would spin the grinder back up
+   * right after a 정지. */
+  if (!Jungji_IsBraking())
+  {
+    TB_TCA9554_Poll();
+  }
   BldcCtrl_Tick(&g_grind_ctrl, now_ms);   /* M1 closed-loop PI (100 ms)        */
   BldcCtrl_Tick(&g_stir_ctrl,  now_ms);   /* M2 closed-loop PI (100 ms)        */
   TB_Lift_Poll();
@@ -332,6 +399,19 @@ static void MotorTask_RunDongjak(uint32_t now_ms)
   BldcCtrl_Tick(&g_stir_ctrl,  now_ms);
 }
 
+/* SCENARIO half - "강음"(HS1) / "배수"(HS4). Both are UNIMPLEMENTED stubs: the
+ * state machines only record that the mode was selected and drive nothing, so
+ * no BldcCtrl_Tick is needed yet. Add it when the sequences are filled in. */
+static void MotorTask_RunKangeum(uint32_t now_ms)
+{
+  Kangeum_MotorTick(now_ms);
+}
+
+static void MotorTask_RunBaesu(uint32_t now_ms)
+{
+  Baesu_MotorTick(now_ms);
+}
+
 void StartMotorTask(void *argument)
 {
   TB_DRV8871_Init();               /* also WDoor_Init/TDoor_Init (doors)       */
@@ -344,34 +424,35 @@ void StartMotorTask(void *argument)
   TB_GpioOut_Init();               /* drain valve + 3 fans, all forced off     */
   Moeum_Init();                    /* scenario armed but idle until selected   */
   Dongjak_Init();                  /* scenario armed but idle until selected   */
+  Kangeum_Init();                  /* HS1 강음 - unimplemented stub            */
+  Baesu_Init();                    /* HS4 배수 - unimplemented stub            */
+  Jungji_Init();                   /* common stop handler (must precede arbiter)*/
+  ModeArbiter_Init();              /* owns g_app_mode; starts in TESTBENCH      */
 
-  app_mode_t prev_mode = g_app_mode;
   for(;;)
   {
     uint32_t now = HAL_GetTick();
 
-    /* On a mode switch, stop everything so a motor left running by the old mode
-     * (keypad-started BLDC, a mid-sequence door) does not keep going unattended. */
-    if (g_app_mode != prev_mode)
-    {
-      BldcCtrl_Stop(&g_grind_ctrl);
-      BldcCtrl_Stop(&g_stir_ctrl);
-      Moeum_Abort();               /* stops stir/valve/door, returns to IDLE    */
-      Dongjak_Abort();             /* stops all actuators, returns to IDLE      */
-      prev_mode = g_app_mode;
-    }
+    /* Common stop handler. Consumes any pending stop request (HS3 정지, lid
+     * lost, mode switch, scenario fault, debugger), releases the BLDC short
+     * brake after JUNGJI_BRAKE_MS and holds the cooling fans while the pot is
+     * still hot. Runs first so the arbiter below sees the settled brake state. */
+    Jungji_Tick(now);
 
-    if (g_app_mode == APP_MODE_MOEUM)
+    /* Mode arbiter, motor half: the only place g_app_mode is written. Applies a
+     * pending switch as stop -> switch -> start, waiting for the brake hold to
+     * expire before issuing the start so a braked BLDC is never commanded to
+     * spin. */
+    ModeArbiter_MotorTick(now);
+
+    switch (g_app_mode)
     {
-      MotorTask_RunMoeum(now);
-    }
-    else if (g_app_mode == APP_MODE_DONGJAK)
-    {
-      MotorTask_RunDongjak(now);
-    }
-    else
-    {
-      MotorTask_RunTestbench(now);
+      case APP_MODE_MOEUM:   MotorTask_RunMoeum(now);   break;
+      case APP_MODE_DONGJAK: MotorTask_RunDongjak(now); break;
+      case APP_MODE_KANGEUM: MotorTask_RunKangeum(now); break;
+      case APP_MODE_BAESU:   MotorTask_RunBaesu(now);   break;
+      case APP_MODE_TESTBENCH:
+      default:               MotorTask_RunTestbench(now); break;
     }
     osDelay(1);
   }

@@ -24,12 +24,12 @@ extern "C" {
  * so TB_TCA9554_SW_ACTIVE_HIGH / _LED_ACTIVE_HIGH are both 0. See the netlist
  * analysis doc (doc/회로도_넷리스트_분석.md, section 8) for the full note.
  *
- * IMPORTANT - single owner of U8/U9:
- *   The generic Membrane_Init()/Membrane_Poll() driver ALSO owns U8/U9 and
- *   implements a different behaviour (press = latch/toggle the LED). It must be
- *   DISABLED while this testbed runs, or the two will fight over the LED port
- *   and the I2C bus. Membrane_Init() (main.c) and Membrane_Poll() (freertos.c)
- *   are commented out for this reason; re-enable them if you drop this testbed.
+ * SINGLE OWNER of U8/U9 (2026-08-18):
+ *   This testbed is now the ONLY owner. The generic press-to-toggle membrane
+ *   driver (Devices/ExtGpio/membrane.*) was deleted - the product controls
+ *   nothing from the front-panel buttons, so there is no longer a second driver
+ *   to fight over the LED port / I2C bus. Keypad-driven motor testing stays
+ *   available here, gated to APP_MODE_TESTBENCH by StartMotorTask.
  *
  * LED behaviour (TCA9554 has NO PWM/dimming - it is a pure digital I/O
  * expander, registers are only Input/Output/Polarity/Config). So instead of

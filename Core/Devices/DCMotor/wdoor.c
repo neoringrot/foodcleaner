@@ -59,3 +59,14 @@ uint8_t WDoor_AtClose(void)
 {
 	return (gpio_ctrl_exti_read(GPIO_EXTI_WHALL_CLOSE) == DOOR_LIMIT_ACTIVE_HIGH) ? 1U : 0U;
 }
+
+/* ---- 모니터링 read-only (protocol_r0 0x26 OUTPUT) -------------------- */
+uint8_t WDoor_GetDrive(void)
+{
+	return wdoor.drive;
+}
+
+uint8_t WDoor_GetDuty(void)
+{
+	return wdoor.duty_pct;
+}

@@ -3,11 +3,33 @@
 각 액추에이터를 **시나리오(모음/동작)와 무관하게 개별적으로** 구동/검사하기 위한 테스트베드 모음.
 모든 테스트베드는 `volatile` 전역 변수를 노출하며, **디버거(live watch / expression)에서 값을 바꾸면 즉시 반영**된다.
 
+## ⚠️ 2026-08-15 변경 — 벤치 사용 전 반드시 읽을 것
+
+`g_app_mode`의 소유자가 바뀌었다. 이제 [`Core/Scenario/mode_arbiter.c`](../Scenario/mode_arbiter.c)가
+**마개 위치 홀센서(HS1~HS5)를 모드와 무관하게 100 ms마다 디코딩**해서 모드를 결정한다.
+벤치 작업에 미치는 영향은 3가지다:
+
+1. **마개(자석)가 HS1/HS2/HS4/HS5 위치에 얹혀 있으면 벤치 모드가 유지되지 않는다.**
+   중재자가 해당 시나리오 모드로 전환해 버리므로 `TB_*_Poll()`이 통째로 멈춘다.
+   → 벤치를 쓸 때는 자석을 치우거나, **`g_modearb.dbg_disable = 1`** 로 중재자를 꺼 둘 것.
+2. **정지가 걸리면 `tb_*_enable` 플래그가 전부 0으로 눌린다.**
+   HS3(정지) 확정 / 마개 이탈 / 홀 다중 인식 시 [`jungji.c`](../Scenario/jungji.c)의
+   `Jungji_Testbench()`가 `tb_wdoor_enable`·`tb_tdoor_enable`·`tb_step1/2_enable`·`tb_lift_enable`·
+   `tb_water_enable`·`tb_speaker_enable`·`tb_heat_enable`·`tb_valve_*`·`tb_fan_*`를 모두 0으로 만든다.
+   **벤치 중 갑자기 다 꺼졌다면 `g_jungji.last_src`를 먼저 볼 것**(1=HS3 정지, 2=마개 이탈, 3=홀 다중 인식).
+   예외: 잔열 냉각 중(`g_jungji.cooling=1`)에는 `tb_fan_exhaust_en`/`tb_bldc_fan_en`이 **1로 유지**된다.
+3. **BLDC 단락제동 홀드(`JUNGJI_BRAKE_MS`=500 ms) 동안 키패드(`TB_TCA9554_Poll`)가 건너뛰어진다.**
+   `BldcCtrl_Start()`가 nBRAKE를 풀어 버리기 때문. `g_jungji.braking`으로 확인 가능.
+
+관찰용 변수 정리는 [동작_디버거_watch_레퍼런스.md §8](../Scenario/동작_디버거_watch_레퍼런스.md) 참조.
+
 ## 공통 동작 모델
 
 - 모든 `TB_*_Poll()`은 `freertos.c`의 `MotorTask_RunTestbench()`에서만 호출된다
-  → **테스트벤치 모드(`g_app_mode` 기본)에서만** 동작하고, 모음/동작 시나리오 모드에서는 자동으로 무시된다
+  → **테스트벤치 모드(`g_app_mode == APP_MODE_TESTBENCH`, 부팅 기본값)에서만** 동작하고,
+  모음/동작/강음/배수 시나리오 모드에서는 자동으로 무시된다
   (해당 모드에서는 시나리오 코드가 동일 액추에이터를 직접 소유).
+  단 위 ⚠️ 항목대로 **모드를 정하는 주체가 마개 홀센서**라는 점에 주의.
 - `TB_*_Init()`은 `StartMotorTask()` 초기화 시퀀스에서 1회 호출된다.
 - 폴링 주기는 `osDelay(1)` (~1 ms).
 - 빌드: `.cproject`가 `Core` 폴더 전체를 소스 경로로 포함 → Testbench에 `.c`를 추가하면 자동 컴파일(별도 등록 불필요).
@@ -23,6 +45,8 @@
 | `tb_gpioout` | 배수/급수 밸브 + 팬 3종 | GPIO on/off | 디버거 enable 변수 |
 | `tb_thermistor` | NTC 온도센서 3종(THERMISTER1/2/3) | ADC1(adc_ctrl) | 디버거 enable 변수(모니터링) |
 | `tb_water` | 급수 WATER-ON + 수위센서 SEN1/SEN2 | GPIO out + EXTI in | 디버거 enable 변수(출력+모니터링) |
+| `tb_doorhall` | 도어 리밋홀 WHALL/THALL(배수문·배출문 개폐) | EXTI in | 디버거 enable 변수(모니터링, 입력전용) |
+| `tb_protocol` | R0 프로토콜 코덱(액추에이터 없음) | protocol_r0 | 디버거 `tb_proto_run_once=1`(1회) / `tb_proto_enable=1`(반복) |
 
 > **ADC 계열 예외(중요)**: `tb_thermistor`는 **센서 모니터** 테스트베드로, 위 "공통 동작 모델"과 달리
 > `MotorTask_RunTestbench()`가 아니라 **`StartDefaultTask()`(~100 ms)** 에서 폴링한다.
@@ -36,6 +60,9 @@
 
 `doc/개별기능검증R1.xlsx`의 항목별 HW 검증 진행 상태. (✅ HW검증완료 · ⏳ 미검증 · ⚠️ 부분/이슈 · ❌ 없음)
 
+> 미검증 항목의 **상세·검증절차·그동안 코드에 넣어 둔 임시 완화 플래그**는
+> **[../Scenario/HW미검증_항목.md](../Scenario/HW미검증_항목.md)** 에 정리되어 있다(2026-08-18).
+
 | # | xls 항목 | 테스트벤치 / 변수 | 핀·커넥터 | 상태 |
 |---|----------|-------------------|-----------|------|
 | 1 | 수중기배출팬(증기) | `tb_fan_vapor_en` | PB15 | ✅ HW 검증완료 |
@@ -45,14 +72,14 @@
 | 5 | 배수구세척솔벨브 | `tb_valve_drain_en` | PB14 | ✅ HW 검증완료 |
 | 6 | 건조통 급수 솔벨브 | `tb_valve_dry_en` | PB13 | ✅ HW 검증완료 |
 | 7 | STEP 공기배출 DOOR | `tb_step1_*` | **J31** (24BYJ48-895) | ✅ HW 검증완료 |
-| 8 | STEP 공기흡입 DOOR | `tb_step2_*` | **J33** (35BYJ46-1014) | ⏳ 미검증 (커넥터 re-pin 필요, RED→pin1) |
+| 8 | STEP 공기흡입 DOOR | `tb_step2_*` | **J33** (35BYJ46-1014) | ✅ HW 검증완료 (2026-08-15, 회전확인). 공통=**Yellow**(pin1), pin2 Red/pin3 Orange/pin4 Blue/pin5 Pink. **24V 확정(2026-08-17)** |
 | 9 | DC 배수부 모터(DOOR) | `tb_wdoor_*` | U5 (DRV8871) | ✅ HW 검증완료 |
-| 10 | DC 배출부 모터(DOOR) | `tb_tdoor_*` | U7 (DRV8871) | ⏳ 미검증 |
-| 11 | 상단 동작 스위치(=HS1~5) | `tb_hall_*` (P0~P4) | U24/J26 | ⚠️ HS4/HS5 정상 · HS1/HS2/HS3 단락으로 사용 불가 (§6) |
-| 12 | 교반원점 홀센서 | `tb_hall_stir_home` (HS6) | U24 P5/J28 | ⏳ 미검증 |
-| 13 | 수거통 홀센서 | `tb_hall_bin` (HS7) | U24 P6/J29 | ⏳ 미검증 |
-| 14 | 리프트 하단 홀센서 | `tb_hall_lift_bottom` (HS8) | U24 P7/J30 | ⏳ 미검증 |
-| 15 | 히터 | (없음) | — | ❌ 테스트벤치 없음 |
+| 10 | DC 배출부 모터(DOOR) | `tb_tdoor_*` | U7 (DRV8871) | ✅ HW 검증완료 (2026-08-15, 회로 담당자 검증) |
+| 11 | 상단 동작 스위치(=HS1~5) | `tb_hall_*` (P0~P4) | U24/J26 | ✅ HW 검증완료 (HS1~3 초기 단락은 **리워크로 해소**, 2026-08-14 §6) |
+| 12 | 교반원점 홀센서 | `tb_hall_stir_home` (HS6) | U24 P5/J28 | ✅ HW 검증완료 (2026-08-15) · ❌ **FW 소비 로직 없음** |
+| 13 | 수거통 홀센서 | `tb_hall_bin` (HS7) | U24 P6/J29 | ✅ HW 검증완료 (2026-08-15) · ❌ **FW 소비 로직 없음 → 수거통 없이 배출됨(안전 공백)** |
+| 14 | 리프트 하단 홀센서 | `tb_hall_lift_bottom` (HS8) | U24 P7/J30 | ✅ HW 검증완료 (2026-08-15) · ❌ **FW 소비 로직 없음** |
+| 15 | 히터 | `tb_heat_*` (`tb_heat`) | **PA12** (HT-POWER) | ⏳ 미검증 (테스트벤치 추가됨 §9). ⚠️`tb_heat` 기본임계 **190/195℃는 폐기된 구 스펙** — 시나리오는 **114/117℃**(`DJ_TEMP_HEATER_ON/OFF_D10`) |
 
 **xls 미포함(테스트벤치에만 있는) 액추에이터:**
 
@@ -61,9 +88,9 @@
 | 분쇄 BLDC (M1) | `tb_grind_en` 외 (`tb_tca9554`) | ✅ HW 검증완료 |
 | 교반 BLDC (M2) | `tb_stir_en` 외 (`tb_tca9554`) | ✅ HW 검증완료 |
 | 리프트 모터 (U6) | `tb_lift_enable` 외 (`tb_lift`) | ✅ HW 검증완료 |
-| NTC 온도센서 3종 | `tb_therm_*` (`tb_thermistor`) | ⏳ read 동작 O / 온도값 정확도 미검증 (§7) |
-| 홀센서 강음/모음/정지 (HS1~3) | `tb_hall_*` (P0~P2) | ❌ 전기적 단락으로 사용 불가 (§6) |
-| 홀센서 배수/동작 (HS4~5) | `tb_hall_*` (P3~P4) | ✅ 정상 동작 확인 (§6) |
+| NTC 온도센서 3종 | `tb_therm_*` (`tb_thermistor`) | ⏳ read 동작 O / **기준 온도계 실측 대조 미완** (§7) |
+| 홀센서 HS1~HS8 (U24 8채널) | `tb_hall_*` (P0~P7) | ✅ **전 채널 정상 동작 확인** (2026-08-15, §6) |
+| 도어 리밋홀 WHALL/THALL (PF3/PF4/PF2/PF5) | `tb_doorhall_*` (`tb_doorhall`) | ⏳ 테스트벤치 추가됨 · HW 미검증 (§10). 배수문/배출문 개폐 게이팅 |
 
 ---
 
@@ -106,8 +133,10 @@ DC 도어 모터. **레벨(level) 방식** (enable 동안 계속 구동, VM 전�
 
 ## 3. `tb_stepmotor` — STEP1·STEP2 스테퍼
 
-24 V 유니폴라 4상. `HAL_GetTick()` 기반으로 `period_ms`마다 1스텝 진행.
-※ STEP2(35BYJ46)는 사용 전 커넥터 re-pin 필요(RED→pin1). 배선은 헤더 주석 참조.
+유니폴라 4상. `HAL_GetTick()` 기반으로 `period_ms`마다 1스텝 진행. 커넥터 핀맵(확정):
+- STEP1(24BYJ48-895/J31): pin1 Red(공통)/pin2 Orange/pin3 Yellow/pin4 Pink/pin5 Blue.
+- STEP2(35BYJ46-1014/J33): pin1 **Yellow(공통)**/pin2 Red/pin3 Orange/pin4 Blue/pin5 Pink
+  (2026-08-15 회전확인, 공통이 Red 아닌 Yellow). **24V 확정(2026-08-17)** — 24V/~300Ω 실장.
 
 | 변수 | 동작 |
 |------|------|
@@ -178,15 +207,37 @@ U24(TCA9554A, I2C1, 0x3B)에 연결된 홀센서 8입력(P0~P7)을 **모니터�
 
 넷리스트 배선: HS1~HS5 → 커넥터 **J26**(핀 2~6), HS6/HS7/HS8 → **J28/J29/J30**. HS 라인에 **풀업 저항 없음**(각 네트 = J핀 + U24핀 2점).
 
-### 검증 진행 상태 / 이슈 (2026-08-12 현재)
+> **★2026-08-15 — 이 모니터는 이제 "구경만 하는" 채널이 아니다.**
+> `tb_hall_trig_mask`(P0~P4)와 **완전히 같은 비트**를 [`mode_arbiter.c`](../Scenario/mode_arbiter.c)가
+> 소비해서 실제 모드 전환·정지를 일으킨다(`HallSensor_GetMask() & 0x1F`). 즉 여기서 보이는 트리거군
+> 비트가 곧 동작이다. 대응 관계:
+>
+> | `tb_hall_trig_mask` | `g_modearb.pos_stable` | 결과 |
+> |---|---|---|
+> | `0x01` HS1 | 1 `LID_POS_KANGEUM` | `APP_MODE_KANGEUM`(스텁) |
+> | `0x02` HS2 | 2 `LID_POS_MOEUM` | `APP_MODE_MOEUM` + `Moeum_Start()` |
+> | `0x04` HS3 | 3 `LID_POS_JUNGJI` | **비상정지** + 대기 모드 복귀 |
+> | `0x08` HS4 | 4 `LID_POS_BAESU` | `APP_MODE_BAESU`(스텁) |
+> | `0x10` HS5 | 5 `LID_POS_DONGJAK` | `APP_MODE_DONGJAK` + `Dongjak_Start()` |
+> | `0x00` | 0 `LID_POS_NONE` | **비상정지**(마개 이탈), 모드는 유지 |
+> | 2비트 이상 | 6 `LID_POS_MULTI` | **비상정지**(홀 이상으로 판정) |
+>
+> `tb_hall_enable`을 0으로 두어도 **중재자는 계속 동작한다**(프로덕션 `hallsensor.c`를 직접 읽으므로).
+> 중재자를 멈추려면 `g_modearb.dbg_disable = 1`. 반대로 **자석 없이 위치를 흉내내려면**
+> `g_modearb.dbg_pos_force`에 위 `pos_stable` 값을 써 넣으면 된다(0 = 미사용).
+> HS6~HS8(교반원점/수거통/리프트하단)은 마개 위치가 아니므로 중재자 대상이 아니다 — **소비 로직 TODO**.
+
+### 검증 진행 상태 / 이슈 (2026-08-15 현재)
 
 | 채널 | 핀 | 상태 |
 |------|----|------|
-| HS4 배수 / HS5 동작 | P3 / P4 | ✅ 정상 동작 확인 |
-| HS1 강음 / HS2 모음 / HS3 정지 | P0 / P1 / P2 | ❌ **전기적 커플링으로 현재 사용 불가** |
-| HS6 교반원점 / HS7 수거통 / HS8 리프트하단 | P5 / P6 / P7 | ⏳ 미검증 |
+| HS1 강음 / HS2 모음 / HS3 정지 / HS4 배수 / HS5 동작 | P0~P4 | ✅ **회로 수정 후 정상 동작 확인** |
+| HS6 교반원점 / HS7 수거통 / HS8 리프트하단 | P5 / P6 / P7 | ✅ **정상 동작 확인 (2026-08-15)** |
 
-**HS1/HS2/HS3 (P0/P1/P2) 문제 — 원인 분석 결과:**
+> **U24 홀센서 8채널(HS1~HS8) 전부 검증 완료.** HS1/HS2/HS3(P0/P1/P2)의 초기 전기적 커플링(아래 원인 분석)은
+> **회로 수정(리워크)으로 해소**되었고, 전 채널이 단독 트리거 시 해당 비트만 반응하는 것을 확인함.
+
+**[해결됨] HS1/HS2/HS3 (P0/P1/P2) 초기 문제 — 원인 분석 기록:**
 
 - 증상: 셋 중 **하나만 트리거해도 3비트가 동시에 1**로 올라옴. `[3][4]`(P3/P4)는 정상.
 - 펌웨어 배제: `decode_mask()`의 `[0]~[4]`는 `(mask>>i)&1`로 완전 대칭이고 읽기 경로(`TCA9554_ReadInput`→1바이트)도 비트별 처리 없음 →
@@ -201,7 +252,7 @@ U24(TCA9554A, I2C1, 0x3B)에 연결된 홀센서 8입력(P0~P7)을 **모니터�
 3. 브리지 제거 후 `tb_hall_pinlevel`로 HS1 단독 트리거 시 bit0만 LOW로 떨어지는지 재확인
 4. (추가) HS 라인 풀업 부재 → 센서가 오픈드레인이면 단락 제거 후 별도 풀업(4.7K~10K→VCC) 필요할 수 있음. `tb_hall_pinlevel` 안정성으로 판별.
 
-> 펌웨어로는 단락된 노드를 분리할 수 없어 **코드 수정 없음**. 하드웨어 리워크 후 재검증 대상.
+> 펌웨어로는 단락된 노드를 분리할 수 없어 **코드 수정 없음**. → **회로 수정(리워크)으로 해결, HS1~HS5 정상 확인(2026-08-14).**
 
 ## 7. `tb_thermistor` — NTC 온도센서 3종 모니터 (이번 세션 신규 파일)
 
@@ -381,6 +432,136 @@ else                 { WATER-ON = LOW  (급수 OFF, 안전); }
 
 ---
 
+## 9. `tb_heat` — 히터(HT-POWER) + 온도센서 연동 (이번 세션 신규 파일)
+
+> ⚠️ **220V 실히터를 스위칭한다. 모든 기본값을 "무장"으로 간주하고, 프로브를 붙이고 감시하며 시험한다.** 실제 과열 안전 주체는 HW 바이메탈(60/80℃ EXTI + 210℃)이고, FW는 감시·차단만 한다.
+
+- **대상**: HT-POWER = PA12 = `o_HT_POWER` = `GPIO_OUT_HT_POWER`. MOC3063 제로크로스 옵토트라이악(Q31/Q32) → AC 히터.
+- **온도센서 연동(핵심)**: 히터는 눈감고 못 켠다. `tb_heat`는 NTC 프로브 1개(`tb_heat_ch`, 기본 CH0 = `DJ_TEMP_CH` = 처리통)의 **평활(EMA) 온도**(`Thermistor_GetCelsius_d10`)를 읽어 **동작 시나리오와 동일한 190/195℃ 히스테리시스**로 히터를 제어한다 → 센서가 루프 안에 있다. 자체 ADC는 하지 않고 `Thermistor_Tick()`가 캐시한 값을 재사용한다.
+- **공유 판정 함수**: HYST 모드의 ON/OFF/과열 판정은 `interface/heater_hyst.h`의 순수함수 `Heater_HystDecide()` / `Heater_IsOverTemp()`가 담당하며, **동작 시나리오 `dj_heater_tick()`도 같은 함수를 사용**한다 → 임계/거동이 이원화되지 않는다. MANUAL 모드와 idle-guard 워치독은 **테스트벤치 전용** 확장이고, 동작 시나리오에는 둘 다 없다.
+- **배치(중요)**: 온도(ADC1)는 `StartDefaultTask`만 읽는 규칙이라, `tb_heat`도 같은 태스크에서 `Thermistor_Tick()` **직후** 폴링한다. `TB_Heat_Poll(g_app_mode==APP_MODE_TESTBENCH)`로 호출 → **테스트벤치 모드일 때만** HT-POWER를 구동하고, 동작 시나리오 모드에서는 핀에 손대지 않는다(시나리오의 `dj_heater_tick`가 단독 소유). `tb_heat_enable=0`이면 항상 강제 OFF.
+
+### 타임드 로깅 세션 (5분 / 30초 샘플)
+
+`tb_heat_enable`이 **0→1이 되는 순간 5분짜리 세션이 시작**된다. 세션 동안 히터는 평소대로 동작하고, **30초마다 상태를 `tb_heat_log[]` 배열에 스냅샷**해 런타임(디버거 배열 watch)에서 열 응답을 그대로 읽을 수 있다. 세션은 **둘 중 하나로 종료**된다:
+
+- **5분 경과** → 자동 종료: `tb_heat_enable`을 코드가 0으로 내리고 히터 강제 OFF.
+- **`tb_heat_enable`을 0으로** → 조작자 중지: 세션 닫고 히터 OFF.
+
+- 샘플 지점: `t = 0, 30, 60, … 300초` (총 **11 슬롯**). 각 슬롯 = `{ t_ms, temp_d10, out, fault }`.
+- 재시작: 다시 `enable` 0→1 하면 로그를 지우고 새 세션 시작. 종료 후에도 마지막 로그는 다음 재시작 전까지 **보존**되어 확인 가능.
+- 상수: `TB_HEAT_LOG_PERIOD_MS=30000`, `TB_HEAT_SESSION_MS=300000`, `TB_HEAT_LOG_COUNT=11` (`tb_heat.h`).
+
+| 변수 | 의미 |
+|------|------|
+| `tb_heat_log[0..count-1]` | 30초 간격 스냅샷 배열(`t_ms`/`temp_d10`/`out`/`fault`) |
+| `tb_heat_log_count` | 채워진 슬롯 수(0..11) |
+| `tb_heat_session_active` | 1=세션 진행중, 0=종료/유휴 |
+| `tb_heat_session_ms` | 현재 세션 경과시간[ms] (0→300000) |
+
+### 모드
+
+| `tb_heat_mode` | 동작 |
+|----------------|------|
+| `TB_HEAT_MODE_HYST` (1, 기본) | `on_d10 ≤ t ≤ off_d10` 밴드 히스테리시스, 밴드 안에서는 직전 상태 유지. **유효 온도 필요**(프로브 ERR 시 OFF) |
+| `TB_HEAT_MODE_MANUAL` (0) | `tb_heat_manual_on`을 그대로 핀에 반영 (전기 결선 확인용). **센서 게이트 없음**(프로브 없이도 동작), 단 유효 온도가 과열이면 차단 |
+
+### 안전
+
+| 보호 | 임계 / 기본 | 종류 | 적용 |
+|------|-------------|------|------|
+| 과열 차단 | `tb_heat_safety_d10` = 2100 (210.0℃, = `DJ_TEMP_SAFETY`) | 래치 | 두 모드 (유효 온도일 때) |
+| idle-guard 워치독 | `tb_heat_max_on_ms` = **0(기본 해제)**, 원하면 예 600000(10분) | 래치 | 테스트벤치 전용 |
+| 센서 결함(open/short → ERR) | HYST에서만 OFF | 라이브(복구 시 자동 해제) | HYST 모드 |
+
+- 래치 해제: `tb_heat_enable`을 0→1로 토글하거나 `tb_heat_clear_fault=1`(자동 0 복귀).
+- 실제 과열 안전 주체는 HW 바이메탈(60/80℃ + 210℃)이고, 위 과열 차단은 FW 백스톱이다.
+
+> **⚠️ 버그 수정 이력(리팩터링 시):** (1) 기존 무조건 센서 게이트가 MANUAL까지 차단 → HYST에만 적용하도록 수정(프로브 없이 전기시험 가능). (2) 워치독 기본 60초가 실제 운전을 끊음 → 기본 0(해제)으로 변경. 진짜 안전(과열·센서·HW 바이메탈)은 유지.
+
+### 관찰/조작 변수
+
+| 변수 | 의미 |
+|------|------|
+| `tb_heat_enable` | 0=대기/OFF, 1=테스트벤치 실행 |
+| `tb_heat_mode` / `tb_heat_ch` | 모드 / 프로브 인덱스(0..2) |
+| `tb_heat_manual_on` | MANUAL 모드 핀 레벨 |
+| `tb_heat_on_d10` / `_off_d10` / `_safety_d10` | 히스테리시스 밴드 + 안전(0.1℃), 기본 1900/1950/2100 |
+| `tb_heat_max_on_ms` | idle-guard 워치독(ms), **0=해제(기본)** |
+| `tb_heat_out` | HT-POWER에 실제 명령한 레벨 0/1 |
+| `tb_heat_temp_d10` | 이번 사이클 사용 온도(ERR=-32768) |
+| `tb_heat_fault` | 비트: 1=센서 2=과열 4=워치독 |
+| `tb_heat_on_ms` / `tb_heat_samples` | 현재 연속 ON시간 / 라이브니스 |
+
+### 벤치 온도로 루프 시험 (190℃ 오븐 없이)
+
+`on/off`를 예: `300/350`(30/35℃)으로 낮추고 프로브를 손·열풍기로 데우면, `tb_heat_out`이 `on` 이하에서 1, `off` 이상에서 0으로 토글하는지 육안 확인 가능. 과열(210℃) 백스톱은 유지된다. 확인 후 값을 실제 1900/1950으로 복원.
+
+### 동작 시나리오 연동 (공유 함수로 통합 완료)
+
+- 히스테리시스/과열 판정을 `interface/heater_hyst.h`의 **순수함수로 추출**하여 `dongjak.c dj_heater_tick()`와 `tb_heat`가 **공유**한다 → 임계/거동 이원화 제거. `dj_heater_tick`은 리팩터링 후에도 기존 거동(ERR=핀 유지, 210℃ 안전, 190/195 밴드)을 그대로 보존한다.
+- 시나리오 히터 구동 자체는 그대로: `dj_heater_tick()`가 `g_therm_c_d10[DJ_TEMP_CH]`를 읽어 HT-POWER 구동, `DJ_COOLDOWN`/`dj_all_off`에서 OFF. 별도 히터 device 없음.
+- **워치독(60s)·MANUAL 모드는 시나리오에 미적용** — 공유 함수에 넣지 않고 `tb_heat`에만 둠. 실제 운전은 이 두 기능이 필요 없고, 오히려 60초 워치독은 운전을 끊으므로 시나리오에서 배제.
+- 소유권 충돌 방지: `tb_heat`는 `defaultTask`, 시나리오 히터는 `MotorTask`. `TB_Heat_Poll`의 `testbench_active` 게이트로 동시 구동을 배제한다(모드 게이트가 이미 차단하므로 시나리오 중 `tb_heat_enable`은 무해하나 0 유지 권장).
+
+### 검증 진행 상태 / 이슈
+
+| 항목 | 상태 |
+|------|------|
+| 빌드 (타깃 `arm-none-eabi-gcc`, cortex-m3, `-Wall -Wextra` 구문검사) | ✅ `heater_hyst.c` / `tb_heat.c` / `dongjak.c` / `freertos.c` 통과 |
+| 실제 HW 동작 (HT-POWER 트라이악 구동, 온도 추종 토글) | ⏳ 미검증 (보드 실측 대기) |
+
+- 코드/통합 완료: `heater_hyst.c/.h` 신규(공유 판정), `freertos.c` `StartDefaultTask`에 include + `TB_Heat_Init()` / `TB_Heat_Poll()` 반영, `dongjak.c` 공유 함수 적용, `Debug/.../subdir.mk`(Interface·Testbench) 빌드 목록 추가.
+- 확인 필요: ① MANUAL로 (프로브 없이도) 트라이악/릴레이 실제 스위칭, ② 밴드 낮춰 프로브 가열 시 `tb_heat_out` 토글, ③ 유효 온도 210℃ 도달 시 과열 래치 후 강제 OFF, ④ HYST에서 센서 탈거 시 즉시 OFF.
+
+---
+
+## 10. `tb_doorhall` — 도어 리밋홀 WHALL/THALL 모니터 (이번 세션 신규 파일)
+
+배수문(WDoor/U5)·배출문(TDoor/U7)의 **열림/닫힘 리밋 홀센서 4입력**을 모니터링하는
+테스트베드. 이 리밋 신호가 모음/동작 시나리오의 도어 개폐 전이(다음 단계 진행/ERROR
+게이팅)를 좌우하는데 기존엔 전용 벤치가 없었다. 액추에이터가 아닌 **센서 모니터**라
+`tb_water`와 동일하게 폴링 위치가 다르다:
+
+- **`StartDefaultTask`(~100 ms)에서 폴링** — EXTI 플래그를 폴링/클리어하는 소유 태스크.
+  `MotorTask`가 아니므로 **`g_app_mode`와 무관하게 항상** 모니터되지만 `tb_doorhall_enable=0`이면 정지.
+- 프로덕션 드라이버(`WDoor_/TDoor_AtOpen/AtClose`)를 그대로 재사용 → at-limit 판정이
+  시나리오와 100 % 일치. 이 tb는 raw 레벨과 엣지 카운트를 덧붙일 뿐.
+- **입력 전용** — 아무 것도 구동하지 않으므로 시나리오와 충돌하지 않는다(항상 켜둬도 안전).
+
+### 핀 맵 (EXTI, GPIO_MODE_IT_FALLING · 극성 `DOOR_LIMIT_ACTIVE_HIGH`=0 active-low)
+
+| 신호 | MCU 핀 | EXTI | 드라이버 판정 | at-limit 변수 | 레벨 | 엣지 카운터 |
+|------|--------|------|--------------|--------------|------|-------------|
+| WHALL-CLOSE | PF3 | exti3 | `WDoor_AtClose()` | `tb_wdoor_at_close` | `tb_whall_close_level` | `tb_whall_close_events` |
+| WHALL-OPEN  | PF4 | exti4 | `WDoor_AtOpen()`  | `tb_wdoor_at_open`  | `tb_whall_open_level`  | `tb_whall_open_events`  |
+| THALL-CLOSE | PF2 | exti2 | `TDoor_AtClose()` | `tb_tdoor_at_close` | `tb_thall_close_level` | `tb_thall_close_events` |
+| THALL-OPEN  | PF5 | exti5 | `TDoor_AtOpen()`  | `tb_tdoor_at_open`  | `tb_thall_open_level`  | `tb_thall_open_events`  |
+
+기타: `tb_doorhall_enable`(1=모니터/0=정지), `tb_doorhall_samples`(enable 중 poll마다 ++).
+엣지 카운트는 main.c 중앙 EXTI 라우터(`gpio_ctrl_exti_dispatch`)가 래치한 falling edge를 센다.
+enable 엣지에서 stale 플래그를 1회 클리어해 시작 시점 레벨을 가짜 엣지로 세지 않는다.
+
+### 동작 시나리오 연동 (dongjak)
+
+- 시나리오는 이미 `WDoor_/TDoor_AtOpen/AtClose`로 이 리밋을 **게이팅**한다(닫힘/열림 도달 시
+  다음 단계, 미도달 시 `DJ_DOOR_TIMEOUT_MS`(15s) 후 `DJ_ERROR`).
+- **`DJ_DOOR_LIMIT_OPTIONAL`(dongjak.h, 기본 0)** 추가 — 모음의 `MOEUM_DOOR_LIMIT_OPTIONAL`과
+  동일 기조. `1`로 두면 리밋 미도달이라도 `DJ_DOOR_BENCH_MS`(4s)만 구동 후 진행(센서 무시).
+  **리밋홀 HW 검증 전 문 동작 육안 확인용 임시 모드.** 검증 완료되면 0으로 되돌린다.
+
+### 검증 진행 상태 (신규)
+
+| 항목 | 상태 |
+|------|------|
+| 빌드 (arm-none-eabi-gcc, cortex-m3, `-Wall -Wextra` 구문검사) | ✅ `tb_doorhall.c`/`freertos.c`/`dongjak.c` 통과 |
+| 실제 HW 동작 (문 여닫을 때 at-limit/level/events 인식) | ⏳ 미검증 (보드 실측 대기) |
+
+- 코드/통합 완료: `freertos.c` `StartDefaultTask`에 include + `TB_DoorHall_Init()`/`TB_DoorHall_Poll()`, `Debug/.../subdir.mk` 빌드 목록 추가.
+- 확인 필요: ① 문을 손으로(또는 `tb_wdoor_*`/`tb_tdoor_*`로) 여닫을 때 해당 at-limit이 1로, `_events` 증가, ② 극성(`DOOR_LIMIT_ACTIVE_HIGH`) 실제 배선 일치, ③ 열림/닫힘 리밋 분리, ④ 4개 채널 개별 응답.
+
+---
+
 ## 사용 예시 (디버거)
 
 ```
@@ -402,6 +583,22 @@ tb_wdoor_enable  = 1
 tb_water_enable  = 1    // WATER-ON HIGH, SEN1/SEN2 인식 시작
 // ...확인 후...
 tb_water_enable  = 0    // 급수 OFF
+
+// [히터] ⚠️ 220V. g_app_mode == APP_MODE_TESTBENCH 상태에서만 동작.
+// (A) 전기 결선만 확인 (MANUAL): 프로브 없이 트라이악 스위칭
+tb_heat_mode      = 0   // MANUAL
+tb_heat_manual_on = 1   // HT-POWER HIGH (안전차단은 계속 적용)
+tb_heat_enable    = 1
+// ...tb_heat_out / tb_heat_on_ms 확인 후...
+tb_heat_enable    = 0
+
+// (B) 온도센서 연동 히스테리시스 루프 (벤치 온도로 시험)
+tb_heat_ch      = 0     // CH0 = 처리통 프로브
+tb_heat_on_d10  = 300   // 30.0℃ 이하 ON  (실사용값 1900)
+tb_heat_off_d10 = 350   // 35.0℃ 이상 OFF (실사용값 1950)
+tb_heat_mode    = 1     // HYST
+tb_heat_enable  = 1     // 프로브 가열/냉각하며 tb_heat_out 토글 관찰
+// tb_heat_fault (1=센서 2=과열 4=워치독), 래치 시 tb_heat_clear_fault=1 로 해제
 ```
 
 ## 이번 세션 진행 결과 요약
@@ -413,8 +610,8 @@ tb_water_enable  = 0    // 급수 OFF
 3. `tb_hallsensor` **신규 생성**: U24 홀센서 8입력(트리거군 P0~P4 + 교반원점/수거통/리프트하단)
    `tb_hall_enable` 게이트 모니터. `freertos.c`의 `StartDefaultTask`에 include + `TB_HallSensor_Init()` / `TB_HallSensor_Poll()` 통합 완료.
    - 트리거 라벨 확정: HS1 강음 / HS2 모음 / HS3 정지 / HS4 배수 / HS5 동작.
-   - **디버깅 결과**: HS4/HS5(P3/P4) 정상, **HS1/HS2/HS3(P0/P1/P2)은 전기적 커플링(저임피던스 단락 추정)으로 현재 사용 불가**,
-     HS6/HS7/HS8(P5/P6/P7) 미검증. 펌웨어 정상 확인(디코드/읽기 경로 대칭), 하드웨어 리워크 대상. 상세는 위 §6 참조.
+   - **디버깅 결과**: 초기 HS1/HS2/HS3(P0/P1/P2) 전기적 커플링(저임피던스 단락) → **회로 수정으로 해결**.
+     **U24 홀센서 8채널(HS1~HS8) 전부 정상 확인(2026-08-15)**. 펌웨어 정상(디코드/읽기 경로 대칭) 확인. 상세는 위 §6 참조.
 4. `tb_thermistor` **신규 생성**: NTC 온도센서 3종(THERMISTER1/2/3) `tb_therm_enable` 게이트 모니터.
    `freertos.c`의 `StartDefaultTask`에 include + `TB_Thermistor_Init()` / `TB_Thermistor_Poll()` 통합 완료(ADC1 단일 소유).
    - **동작 확인 O**: enable 시 3채널 raw·섭씨 갱신 및 `tb_therm_samples` 증가 확인됨.
@@ -428,3 +625,14 @@ tb_water_enable  = 0    // 급수 OFF
    `tb_water_enable`을 WATER-ON에 미러링하고 SEN1/SEN2의 레벨·present(active-low)·falling-edge 카운트를 노출.
    `freertos.c`의 `StartDefaultTask`에 include + `TB_Water_Init()` / `TB_Water_Poll()` 통합 완료, `Debug/.../subdir.mk` 빌드 목록 추가.
    - **빌드 구문검사 통과 / HW 동작 미검증**(보드 실측 대기). 시나리오 실행 중에는 급수 라인 충돌 방지를 위해 `tb_water_enable=0` 유지. 상세는 위 §8 참조.
+6. `tb_heat` **신규 생성**: 히터 `HT-POWER`(PA12) 제어 + **온도센서 연동**. NTC 평활온도(`Thermistor_GetCelsius_d10`)를 읽어 동작 시나리오와 동일한 190/195℃ 히스테리시스로 히터 제어(센서 in-loop), MANUAL 강제모드 별도.
+   - 안전 3중: 210℃ 과열(래치)·최대 연속 ON 60s 워치독(래치)·센서 ERR 즉시 OFF(라이브). 기본 disable/off.
+   - **소유권 게이트**: 온도(ADC1) 규칙상 `defaultTask`에서 `Thermistor_Tick()` 직후 폴링. `TB_Heat_Poll(g_app_mode==APP_MODE_TESTBENCH)`로 테스트벤치 모드일 때만 HT-POWER 구동 → 동작 시나리오(`MotorTask`의 `dj_heater_tick`)와 핀 충돌 배제.
+   - `freertos.c`에 include + `TB_Heat_Init()` / `TB_Heat_Poll()` 통합, `Debug/.../subdir.mk` 빌드 목록 추가. 구문검사(`arm-none-eabi-gcc -Wall`) 통과 / HW 미검증. **동작 시나리오는 이미 히터-온도 연동 완료** 상태이며 임계 기본값을 `DJ_TEMP_*`와 일치시킴. 상세는 위 §9 참조.
+7. `tb_doorhall` **신규 생성**: 도어 리밋홀 4입력(WHALL/THALL open/close, PF3/PF4/PF2/PF5 EXTI) `tb_doorhall_enable` 게이트 모니터. 프로덕션 `WDoor_/TDoor_AtOpen/AtClose` 재사용으로 at-limit이 시나리오와 일치, raw 레벨·falling-edge 카운트 노출.
+   - `freertos.c` `StartDefaultTask`에 include + `TB_DoorHall_Init()` / `TB_DoorHall_Poll()` 통합, `Debug/.../subdir.mk` 빌드 목록 추가. 입력 전용이라 시나리오와 무충돌(항상 켜둬도 안전). 구문검사(`-Wall -Wextra`) 통과 / HW 미검증. 상세는 위 §10 참조.
+8. **동작 시나리오(dongjak) 연동 보강**:
+   - **급수 WATER-ON(PE2) 연동**: `DJ_FILL_USE_WATER_ON`(기본 1) + `dj_fill_on/off()` 헬퍼로 헹굼 FILL 시 VALVE_DRY_IN(PB13)과 WATER_ON(PE2)을 함께 ON. 모음(`MOEUM_FILL_USE_WATER_ON`)과 동일 — 수위센서 통수 조건 확보(미연동 시 FILL 감지 실패→`DJ_ERROR` 위험 제거).
+   - **배수밸브 VALVE_DRAIN_CLN(PB14) 연동**: `DJ_DRAIN_VALVE_USE`(기본 1) + `dj_wdoor_open/close()` 래퍼로 배수문 개방=배수밸브 ON, 닫힘=OFF 불변식 확립(실제 배수는 문+밸브 동반 개방). PB14 벤치는 `tb_valve_drain_en`으로 이미 HW 검증완료(항목5).
+   - **도어 리밋 벤치옵션**: `DJ_DOOR_LIMIT_OPTIONAL`(기본 0) + `DJ_DOOR_BENCH_MS`(4s) + `dj_door_done()` 게이트 판정. 리밋홀 HW 검증 전 문 동작 육안 확인용(모음과 동일 기조). 6개 도어 게이트 전이에 적용.
+   - 구문검사: `dongjak.c`가 기본/`DJ_DOOR_LIMIT_OPTIONAL=1`/플래그 off(0) 조합 모두 `-Wall -Wextra` 통과.

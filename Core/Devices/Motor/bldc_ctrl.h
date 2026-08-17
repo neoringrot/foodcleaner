@@ -138,8 +138,40 @@ void    BldcCtrl_Start(BldcCtrl_t *c, uint8_t reverse); /* start; resumes last s
 void    BldcCtrl_Stop(BldcCtrl_t *c);                   /* stop + re-arm (clears lock; keeps rung) */
 void    BldcCtrl_SpeedStep(BldcCtrl_t *c);              /* next ladder rung (cycles)   */
 
+/* ---- Emergency stop (jungji.c) ------------------------------------------
+ * BldcCtrl_Stop() is a COAST stop: DRV8306_Stop() drops duty to 0 and puts the
+ * gate driver to sleep, so a loaded rotor (grinder blade, stirrer paddle) free-
+ * wheels down over seconds. That is fine for a normal end-of-step stop, but not
+ * for the 4.5 emergency path (lid opened -> a hand can reach the blade).
+ *
+ * BldcCtrl_BrakeStop() short-brakes instead: nBRAKE LOW shorts all three phases
+ * through the low-side FETs, which dumps the rotor's kinetic energy as heat in
+ * the windings and stops it in a fraction of the coast time. The brake only
+ * works while the gate driver is AWAKE, so ENABLE is deliberately kept HIGH and
+ * the controller is merely marked idle (running=0) so BldcCtrl_Tick() cannot
+ * re-drive it. The caller must therefore call BldcCtrl_BrakeRelease() after a
+ * hold time (JUNGJI_BRAKE_MS) to release nBRAKE and drop the driver to sleep --
+ * leaving the phases shorted forever would keep the FETs conducting.
+ * Pairing is enforced by Jungji_Tick(); do not call these directly elsewhere. */
+void    BldcCtrl_BrakeStop(BldcCtrl_t *c);    /* short brake, driver stays awake */
+void    BldcCtrl_BrakeRelease(BldcCtrl_t *c); /* release brake -> normal Stop()  */
+
 /* 1 = motor currently spinning (RUN or UNJAM); mirrors c->running. */
 uint8_t BldcCtrl_IsRunning(const BldcCtrl_t *c);
+
+/* ---- 폴트 래치 해제 -------------------------------------------------------
+ * nFAULT 는 DRV8306 쪽에서 래치된다(h->fault, EXTI 하강에지). BldcCtrl_Stop() 은
+ * 소프트락(LOCKED)만 풀고 이 래치는 건드리지 않으므로, 한 번 폴트가 뜨면 다음
+ * Start 까지 c->fault 가 1 로 남아 앱 화면에 계속 표시된다.
+ * 이 함수는 DRV8306_ClearFault()(ENABLE 펄스로 래치 리셋)를 호출해 표시를 실제로
+ * 지운다. 앱의 '에러 해제' / '정지' 명령이 이 경로를 쓴다.
+ *
+ * ⚠ 회전 중에는 아무것도 하지 않는다. ClearFault 는 ENABLE 을 내렸다 올려 드라이버를
+ *   깨우는 동작이라 구동 중에 부르면 출력이 끊긴다. 폴트를 지우려면 먼저 정지해야
+ *   한다(정지 경로에서 부르므로 실제로는 문제되지 않는다).
+ * ⚠ MotorTask 에서만 호출할 것(ENABLE 핀을 만진다). 프로토콜 태스크는 jungji 에
+ *   요청만 남긴다 - Jungji_RequestFaultClear() 참조. */
+void    BldcCtrl_ClearFault(BldcCtrl_t *c);
 
 #ifdef __cplusplus
 }

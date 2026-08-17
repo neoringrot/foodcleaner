@@ -40,11 +40,13 @@ void DRV8871_Init(DRV8871_HandleTypeDef *h)
 void DRV8871_Enable(DRV8871_HandleTypeDef *h)
 {
 	HAL_GPIO_WritePin(h->en_port, h->en_pin, GPIO_PIN_SET);
+	h->vm_on = 1U;
 }
 
 void DRV8871_Disable(DRV8871_HandleTypeDef *h)
 {
 	HAL_GPIO_WritePin(h->en_port, h->en_pin, GPIO_PIN_RESET);
+	h->vm_on = 0U;
 }
 
 /* Speed control via coast-decay (datasheet section 7.4.2): the driven input is
@@ -53,12 +55,16 @@ void DRV8871_Forward(DRV8871_HandleTypeDef *h, uint8_t duty_pct)
 {
 	__HAL_TIM_SET_COMPARE(h->htim, h->in2_ch, 0);
 	__HAL_TIM_SET_COMPARE(h->htim, h->in1_ch, DRV8871_DutyTicks(h, duty_pct));
+	h->drive    = (uint8_t)DRV8871_DRIVE_FWD;
+	h->duty_pct = duty_pct;
 }
 
 void DRV8871_Reverse(DRV8871_HandleTypeDef *h, uint8_t duty_pct)
 {
 	__HAL_TIM_SET_COMPARE(h->htim, h->in1_ch, 0);
 	__HAL_TIM_SET_COMPARE(h->htim, h->in2_ch, DRV8871_DutyTicks(h, duty_pct));
+	h->drive    = (uint8_t)DRV8871_DRIVE_REV;
+	h->duty_pct = duty_pct;
 }
 
 /* A compare value past ARR keeps a channel's output active for the whole period
@@ -68,10 +74,14 @@ void DRV8871_Brake(DRV8871_HandleTypeDef *h)
 {
 	__HAL_TIM_SET_COMPARE(h->htim, h->in1_ch, h->arr + 1U);
 	__HAL_TIM_SET_COMPARE(h->htim, h->in2_ch, h->arr + 1U);
+	h->drive    = (uint8_t)DRV8871_DRIVE_BRAKE;
+	h->duty_pct = 0U;
 }
 
 void DRV8871_Coast(DRV8871_HandleTypeDef *h)
 {
 	__HAL_TIM_SET_COMPARE(h->htim, h->in1_ch, 0);
 	__HAL_TIM_SET_COMPARE(h->htim, h->in2_ch, 0);
+	h->drive    = (uint8_t)DRV8871_DRIVE_COAST;
+	h->duty_pct = 0U;
 }

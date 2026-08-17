@@ -7,6 +7,35 @@
 #include <stdint.h>
 #include <stddef.h>
 
+/* =========================================================================
+ * ★BLE 드라이버 일괄 비활성화 스위치 (2026-08-17)
+ *
+ * 0 = 비활성(현재). ble.h/ble.c 전체가 컴파일에서 빠진다.
+ * 1 = 활성. 아래 원본 드라이버가 그대로 살아난다.
+ *
+ * 왜 껐는가:
+ *   UART5 는 R0 프로토콜 전송로(Core/Interface/uart_ctrl.c)가 소유한다. HAL 은
+ *   포트당 RX 를 하나만 무장할 수 있으므로 ble.c 와 uart_ctrl 이 동시에 데이터
+ *   경로를 가질 수 없다. BLE 모듈은 BYPASS 모드(o_BLE_MODE=LOW)에서 HOST UART 를
+ *   원격 피어로 그대로 통과시키므로, 모듈 드라이버 없이도 UART5 = 앱 링크가 된다.
+ *   BYPASS 선택에 필요한 것은 o_BLE_MODE 를 LOW 로 두는 것뿐이고, 그것은 main.c
+ *   에서 gpio_ctrl 로 직접 처리한다(ble.c 불필요).
+ *
+ * 다시 켜는 방법(AT 커맨드로 모듈을 설정해야 할 때):
+ *   1) 여기 BLE_ENABLE 을 1 로
+ *   2) main.c : gpio_ctrl_off(GPIO_OUT_BLE_MODE) 대신 BLE_Init() 호출.
+ *      단, 그 전에 UartCtrl_DeInit() 로 UART5 RX 를 반납해야 한다.
+ *   3) usart.c : HAL_UART_RxCplt/ErrorCallback 의 UART5 분기를
+ *      UartCtrl_*ISR() -> BLE_UART_*ISR() 로 되돌린다.
+ *   (즉 BLE_ENABLE=1 로만 두고 위 2~3 을 안 하면 UART5 는 여전히 uart_ctrl 것이고
+ *    ble.c 의 송수신 함수는 동작하지 않는다. 컴파일은 된다.)
+ * ========================================================================= */
+#ifndef BLE_ENABLE
+#define BLE_ENABLE      0
+#endif
+
+#if BLE_ENABLE
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -99,5 +128,7 @@ void BLE_UART_ErrorISR(void);    /* UART5 error: re-arm RX              */
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* BLE_ENABLE */
 
 #endif /* DEVICES_BLE_H_ */

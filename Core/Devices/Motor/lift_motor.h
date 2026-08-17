@@ -49,6 +49,13 @@ void Lift_DownSpeed(uint8_t duty_pct); /* reverse at 0-100% */
 void Lift_Brake(void);
 void Lift_Stop(void);     /* coast */
 
+
+/* ---- 모니터링 read-only (protocol_r0 0x26 OUTPUT) ---------------------
+ * drive = drv8871_drive_t (0 코스트 / 1 정회전 / 2 역회전 / 3 제동),
+ * duty  = 마지막으로 지령한 PWM [%]. 피드백이 아니라 "마지막 지령"이다. */
+uint8_t Lift_GetDrive(void);
+uint8_t Lift_GetDuty(void);
+
 #ifdef __cplusplus
 }
 #endif

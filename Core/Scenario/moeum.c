@@ -48,6 +48,13 @@ static void moeum_fill_off(void)
  * 모터/밸브 전원만 내린다. DONE/ERROR/Abort 공통 경로. */
 static void moeum_all_off(void)
 {
+	/* ★교반 서브-FSM 플래그부터 내린다. BldcCtrl_Stop() 만으로는 모자란다 -
+	 * stir_active 가 남아 있으면 다음 MotorTick 에서 moeum_stir_tick() 이 다시
+	 * BldcCtrl_Start() 를 걸어 모터가 계속 돈다.
+	 * 실측: 에러 발생 후에도 교반이 멈추지 않았다. 비상정지 경로는 호출부에서
+	 * 따로 내리고 있었지만 에러/완료(MOEUM_ERROR/MOEUM_DONE) 진입 경로가 이것을
+	 * 빠뜨렸다. 빠뜨릴 수 없도록 "전부 끈다"의 정의 안으로 옮긴다. */
+	g_moeum.stir_active = 0U;
 	BldcCtrl_Stop(&g_stir_ctrl);
 	moeum_fill_off();
 	WDoor_Stop();       /* coast */
@@ -63,14 +70,14 @@ static void moeum_stir_spin(uint8_t reverse)
 	g_stir_ctrl.target_out_rpm = (uint16_t)MOEUM_STIR_OUT_RPM;
 }
 
-/* 교반 서브-FSM 시작(CCW부터). */
+/* 교반 서브-FSM 시작(사양대로 CW부터). */
 static void moeum_stir_begin(MoeumCtx *c, uint32_t now)
 {
 	c->stir_active      = 1U;
-	c->stir_phase       = (uint8_t)MOEUM_STIR_CCW;
+	c->stir_phase       = (uint8_t)MOEUM_STIR_CW;
 	c->stir_phase_since = now;
 	c->stir_cycles      = 0U;
-	moeum_stir_spin(1U);                   /* CCW                            */
+	moeum_stir_spin(0U);                   /* CW                             */
 }
 
 static void moeum_stir_end(MoeumCtx *c)
@@ -79,7 +86,8 @@ static void moeum_stir_end(MoeumCtx *c)
 	BldcCtrl_Stop(&g_stir_ctrl);
 }
 
-/* 교반 CCW 3s -> 정지 1s -> CW 3s 를 반복. 한 cycle(=7s) 완료 시 stir_cycles++.
+/* 교반 1cycle = CW 3s -> 정지(딜레이) 1s -> CCW 3s = 7s. 22 cycle 반복.
+ * CCW 가 끝나는 지점이 cycle 경계이며 그때 stir_cycles++ 한다.
  * stir_active 인 동안 매 MotorTick 호출된다(STIR/DRAIN_OPEN/DRAIN_WAIT 공용). */
 static void moeum_stir_tick(MoeumCtx *c, uint32_t now)
 {
@@ -87,10 +95,10 @@ static void moeum_stir_tick(MoeumCtx *c, uint32_t now)
 
 	switch ((MoeumStirPhase)c->stir_phase)
 	{
-	case MOEUM_STIR_CCW:
-		if (el >= (uint32_t)MOEUM_STIR_CCW_MS)
+	case MOEUM_STIR_CW:
+		if (el >= (uint32_t)MOEUM_STIR_CW_MS)
 		{
-			BldcCtrl_Stop(&g_stir_ctrl);       /* 정지 구간 진입             */
+			BldcCtrl_Stop(&g_stir_ctrl);       /* 정지(딜레이) 구간 진입     */
 			c->stir_phase       = (uint8_t)MOEUM_STIR_DELAY;
 			c->stir_phase_since = now;
 		}
@@ -99,19 +107,19 @@ static void moeum_stir_tick(MoeumCtx *c, uint32_t now)
 	case MOEUM_STIR_DELAY:
 		if (el >= (uint32_t)MOEUM_STIR_DELAY_MS)
 		{
-			moeum_stir_spin(0U);               /* CW 기동                    */
-			c->stir_phase       = (uint8_t)MOEUM_STIR_CW;
+			moeum_stir_spin(1U);               /* CCW 기동                   */
+			c->stir_phase       = (uint8_t)MOEUM_STIR_CCW;
 			c->stir_phase_since = now;
 		}
 		break;
 
-	case MOEUM_STIR_CW:
+	case MOEUM_STIR_CCW:
 	default:
-		if (el >= (uint32_t)MOEUM_STIR_CW_MS)
+		if (el >= (uint32_t)MOEUM_STIR_CCW_MS)
 		{
-			c->stir_cycles++;                  /* 1 cycle 완료               */
-			moeum_stir_spin(1U);               /* 다음 cycle: CCW 재기동      */
-			c->stir_phase       = (uint8_t)MOEUM_STIR_CCW;
+			c->stir_cycles++;                  /* 1 cycle(7s) 완료           */
+			moeum_stir_spin(0U);               /* 다음 cycle: CW 재기동       */
+			c->stir_phase       = (uint8_t)MOEUM_STIR_CW;
 			c->stir_phase_since = now;
 		}
 		break;
@@ -197,8 +205,12 @@ void Moeum_Init(void)
 	g_moeum.dbg_force_start = 0U;
 	g_moeum.water_reached = 0U;
 	g_moeum.hs_prev       = 0U;
+	g_moeum.abort_req     = 0U;
+	g_moeum.dbg_force_stop = 0U;
+	g_moeum.lid_guard     = 0U;
+	g_moeum.lid_low_cnt   = 0U;
 	g_moeum.stir_active   = 0U;
-	g_moeum.stir_phase    = (uint8_t)MOEUM_STIR_CCW;
+	g_moeum.stir_phase    = (uint8_t)MOEUM_STIR_CW;   /* 사이클 첫 위상 */
 	g_moeum.stir_phase_since = 0U;
 	g_moeum.stir_cycles   = 0U;
 	g_moeum.drain_open_since = 0U;
@@ -219,24 +231,79 @@ void Moeum_Abort(void)
 	moeum_all_off();
 	g_moeum.stir_active = 0U;
 	g_moeum.start_req   = 0U;
+	g_moeum.abort_req   = 0U;
+	g_moeum.dbg_force_stop = 0U;
+	g_moeum.lid_guard   = 0U;
+	g_moeum.lid_low_cnt = 0U;
 	g_moeum.state       = (uint8_t)MOEUM_IDLE;
 	g_moeum.state_since = HAL_GetTick();
+}
+
+/* 4.5 정지 요청(외부 트리거용: 앱 PROTO_ACT_STOP / 디버거. 맴브레인 버튼 제어는
+ * 2026-08-18 폐지). BUSY일 때만 유효 - MotorTick가 소비하여 즉시 안전정지 후
+ * IDLE(모음은 히터 없어 식힘 불필요). */
+void Moeum_RequestStop(void)
+{
+	g_moeum.abort_req = 1U;
 }
 
 /* 100ms, StartDefaultTask - 센서만. 상태 전이/모터 구동은 하지 않는다. */
 void Moeum_SenseTick(void)
 {
+#if MOEUM_HS_TRIGGER_INTERNAL
 	/* 시작 트리거: HS2(모음) 눌림 상승에지  OR  디버거 강제(dbg_force_start).
 	 * 둘 중 무엇이든 Moeum_Start()로 수렴 -> IDLE일 때만 start_req 래치.
 	 * (디버거에서 g_moeum.start_req=1 을 직접 세팅해도 MotorTick가 동일하게 소비) */
 	uint8_t hs      = HallSensor_Get((uint8_t)MOEUM_HS_START_IDX);
 	uint8_t hs_edge = (uint8_t)((hs != 0U) && (g_moeum.hs_prev == 0U));
-	if (hs_edge || (g_moeum.dbg_force_start != 0U))
+	uint8_t force   = g_moeum.dbg_force_start;
+	if (hs_edge || force)
 	{
 		g_moeum.dbg_force_start = 0U;   /* 강제 트리거는 1회성 */
+		if (g_moeum.state == (uint8_t)MOEUM_IDLE)
+		{
+			/* 실제 HS 상승에지 시작만 투입구 감시 무장(벤치 강제시작 제외). */
+			g_moeum.lid_guard   = (uint8_t)(hs_edge && (force == 0U));
+			g_moeum.lid_low_cnt = 0U;
+		}
 		Moeum_Start();
 	}
 	g_moeum.hs_prev = hs;
+
+#if MOEUM_LID_OPEN_ABORT
+	/* 4.5 투입구 개방 감시: 무장 상태에서 처리 중 마개가 모음 위치를 벗어나면
+	 * (HS LOW 연속 N회) 비상정지 요청. */
+	if (g_moeum.lid_guard && Moeum_IsBusy())
+	{
+		if (hs == 0U)
+		{
+			if (g_moeum.lid_low_cnt < 255U) { g_moeum.lid_low_cnt++; }
+			if (g_moeum.lid_low_cnt >= (uint8_t)MOEUM_LID_CONFIRM_SAMPLES)
+			{ g_moeum.abort_req = 1U; }
+		}
+		else { g_moeum.lid_low_cnt = 0U; }
+	}
+#endif
+#else  /* !MOEUM_HS_TRIGGER_INTERNAL - 중재자(mode_arbiter.c)가 트리거를 소유 */
+	/* HS2 상승에지 시작과 마개 이탈 감시는 중재자가 HS1~5를 통째로 디코딩해
+	 * 처리한다(Moeum_Start() / Jungji_Request(HS_LOST)). 여기서 HS를 또 읽으면
+	 * 같은 이벤트를 두 번 처리하게 되므로 읽지 않는다. hs_prev/lid_guard 는
+	 * 이 경로에서 쓰이지 않아 stale 될 일도 없다.
+	 * 벤치 강제 시작만 그대로 유효(HS 없이 시나리오를 돌려보는 용도). */
+	if (g_moeum.dbg_force_start != 0U)
+	{
+		g_moeum.dbg_force_start = 0U;
+		g_moeum.lid_guard       = 0U;   /* 강제 시작은 투입구 감시 무장 안 함 */
+		g_moeum.lid_low_cnt     = 0U;
+		Moeum_Start();
+	}
+#endif
+	/* 4.5 정지 모사: 벤치/외부 트리거로 dbg_force_stop 세팅 시 정지(디버거 전용 훅). */
+	if (g_moeum.dbg_force_stop != 0U)
+	{
+		g_moeum.dbg_force_stop = 0U;
+		g_moeum.abort_req = 1U;
+	}
 
 	/* 수위 감지 래치(MotorTick가 FILL 진입 시 클리어) */
 	if (moeum_water_present())
@@ -250,6 +317,22 @@ void Moeum_MotorTick(uint32_t now_ms)
 {
 	MoeumCtx *c  = &g_moeum;
 	uint32_t  el = now_ms - c->state_since;
+
+	/* 4.5 비상정지 요청 소비: 처리 중이면 전 모터/밸브 정지 후 IDLE(히터 없어 식힘
+	 * 불필요). 교반 tick보다 먼저 처리해 정지 틱에 교반을 다시 돌리지 않는다. */
+	if (c->abort_req)
+	{
+		c->abort_req = 0U;
+		if (Moeum_IsBusy())
+		{
+			moeum_all_off();
+			c->stir_active = 0U;
+			c->lid_guard   = 0U;
+			c->lid_low_cnt = 0U;
+			/* TODO(음성): "처리 중단/추가 투입 불가" 안내 멘트 (미구현) */
+			moeum_enter(c, MOEUM_IDLE, now_ms);
+		}
+	}
 
 	/* 교반 서브-FSM은 stir_active 인 모든 상태에서 지속 구동 */
 	if (c->stir_active)

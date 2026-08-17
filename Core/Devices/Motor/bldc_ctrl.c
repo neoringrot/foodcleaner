@@ -142,6 +142,19 @@ void BldcCtrl_Start(BldcCtrl_t *c, uint8_t reverse)
 	c->state     = (uint8_t)BLDC_RUN;
 }
 
+/* 폴트 래치 해제. 근거/제약은 헤더 주석 참조. */
+void BldcCtrl_ClearFault(BldcCtrl_t *c)
+{
+	if (c->running != 0U)
+		return;                              /* 구동 중에는 건드리지 않는다 */
+
+	DRV8306_ClearFault(c->cfg->h);           /* ENABLE 펄스 -> 래치 리셋     */
+	c->fault     = 0U;
+	c->retry_cnt = 0U;
+	if (c->state == (uint8_t)BLDC_LOCKED)
+		c->state = (uint8_t)BLDC_IDLE;       /* 소프트락도 함께 해제         */
+}
+
 void BldcCtrl_Stop(BldcCtrl_t *c)
 {
 	const BldcCtrl_Cfg_t *k = c->cfg;
@@ -155,6 +168,36 @@ void BldcCtrl_Stop(BldcCtrl_t *c)
 	c->duty_pm        = 0;
 	c->state          = (uint8_t)BLDC_IDLE;  /* Stop clears any soft-lock       */
 	bldc_pi_reset(c);
+}
+
+/* Emergency short-brake. Unlike Stop() the driver is left AWAKE (ENABLE HIGH):
+ * nBRAKE only shorts the phases while the gate driver is powered, so sleeping
+ * here would silently turn the brake into a coast. The controller is marked
+ * IDLE so BldcCtrl_Tick() stops driving duty; target is forced to 0 (not the
+ * ladder rung) so nothing restarts it implicitly. Must be paired with
+ * BldcCtrl_BrakeRelease() -- see the header. */
+void BldcCtrl_BrakeStop(BldcCtrl_t *c)
+{
+	const BldcCtrl_Cfg_t *k = c->cfg;
+
+	DRV8306_Enable(k->h);                    /* brake needs the driver awake    */
+	DRV8306_Brake(k->h);                     /* duty 0 + nBRAKE LOW (short)     */
+	c->running        = 0U;
+	c->target_out_rpm = 0U;
+	c->sp_out_rpm     = 0U;
+	c->duty_pm        = 0;
+	c->retry_cnt      = 0U;
+	c->stall_active   = 0U;
+	c->state          = (uint8_t)BLDC_IDLE;  /* also clears any soft-lock       */
+	bldc_pi_reset(c);
+}
+
+/* Release the short brake and settle into the normal stopped state (duty 0 +
+ * sleep, ladder rung restored, PI reset). */
+void BldcCtrl_BrakeRelease(BldcCtrl_t *c)
+{
+	DRV8306_ReleaseBrake(c->cfg->h);
+	BldcCtrl_Stop(c);
 }
 
 void BldcCtrl_SpeedStep(BldcCtrl_t *c)

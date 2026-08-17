@@ -27,11 +27,12 @@ static StepMotor_HandleTypeDef step1 =
 	          o_STEP1_M3_Pin, o_STEP1_M4_Pin },
 };
 
-/* STEP2 = 35BYJ46-1014 (24 V), a DIFFERENT motor than STEP1. Its lead connector
- * must be re-pinned to RED(common)->J33.pin1, then Orange/Yellow/Blue/Pink on
- * pins 2..5 (= M1..M4). See step_motor.h: as received the leads were PINK BLUE
- * ORANGE RED YELLOW (RED wrongly on pin4) -- fix the connector before enabling.
- * If it only buzzes after re-pinning, swap the pin4/pin5 wires (Blue<->Pink). */
+/* STEP2 = 35BYJ46-1014 (outline drawing 35BYJ46-210), a DIFFERENT motor than
+ * STEP1. CONFIRMED WORKING 2026-08-15. This motor's common is YELLOW (not red).
+ * Confirmed J33 connector: pin1 Yellow(common +24V) / pin2 Red(M1) /
+ * pin3 Orange(M2) / pin4 Blue(M3) / pin5 Pink(M4). Coils {Red,Blue}+{Orange,Pink}.
+ * Natural M1..M4 handle order rotates (no code change); flip tb_step2_dir for
+ * direction. See step_motor.h. (24 V confirmed 2026-08-17.) */
 static StepMotor_HandleTypeDef step2 =
 {
 	.port = { o_STEP2_M1_GPIO_Port, o_STEP2_M2_GPIO_Port,

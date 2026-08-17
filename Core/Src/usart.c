@@ -23,21 +23,39 @@
 /* USER CODE BEGIN 0 */
 #include "wifi.h"
 #include "ble.h"
+#include "uart_ctrl.h"
 
-/* Single shared UART RX/error dispatcher.
+/* Single shared UART RX/TX/error dispatcher.
  *
  * USE_HAL_UART_REGISTER_CALLBACKS is 0 in stm32f1xx_hal_conf.h, so these HAL
  * callbacks are weak symbols that may be overridden exactly once in the whole
  * link. Each device driver therefore exposes plain ISR hooks and we fan the
  * events out here by peripheral instance:
- *   UART4 -> wifi.c (ESP-AT)      UART5 -> ble.c (BoT-nLE521)
- * USART1 is left untouched for whoever owns it. */
+ *   UART4 -> wifi.c (ESP-AT)
+ *   UART5 -> uart_ctrl.c (protocol_r0 transport, see below)
+ * USART1 is left untouched for whoever owns it.
+ *
+ * ★UART5 ownership: uart_ctrl.c, not ble.c. The BLE module (BoT-nLE521) sits on
+ * UART5 in BYPASS mode, so the bytes on this port are the app-facing protocol
+ * stream (Core/Devices/Comm/protocol_r0.c) rather than AT traffic. HAL can only
+ * have one RX armed at a time, so exactly one of the two may own the data path;
+ * ble.c is left in the tree untouched for AT-mode bring-up (see uart_ctrl.h
+ * "UART5 소유권"). To hand UART5 back to ble.c: call UartCtrl_DeInit() + BLE_Init()
+ * and swap the two branches below. */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
 	if (huart->Instance == UART4)
 		WiFi_UART_RxCpltISR();
 	else if (huart->Instance == UART5)
-		BLE_UART_RxCpltISR();
+		UartCtrl_RxCpltISR();
+}
+
+/* Only UART5 transmits under interrupt (uart_ctrl's TX ring); wifi.c/ble.c use
+ * blocking HAL_UART_Transmit, which never raises this callback. */
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+	if (huart->Instance == UART5)
+		UartCtrl_TxCpltISR();
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
@@ -45,7 +63,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 	if (huart->Instance == UART4)
 		WiFi_UART_ErrorISR();
 	else if (huart->Instance == UART5)
-		BLE_UART_ErrorISR();
+		UartCtrl_ErrorISR();
 }
 /* USER CODE END 0 */
 

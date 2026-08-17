@@ -61,6 +61,19 @@ extern "C" {
  * shared #define (ARR is a timer-wide property, not per-channel). */
 #define DRV8871_PWM_FREQ_HZ  20000U
 
+/* Commanded drive state, published for monitoring. There is no feedback on this
+ * driver (no encoder, no current sense on the door motors), so this is the last
+ * command issued, not a measurement -- but it is the same thing the R0 protocol
+ * has to report for "배수문 구동 중 / 방향" and it beats trying to reverse the
+ * state back out of the TIM3 compare registers. */
+typedef enum
+{
+	DRV8871_DRIVE_COAST = 0,   /* IN1=IN2=0: freewheel                       */
+	DRV8871_DRIVE_FWD   = 1,   /* IN1 PWM  : Forward()                       */
+	DRV8871_DRIVE_REV   = 2,   /* IN2 PWM  : Reverse()                       */
+	DRV8871_DRIVE_BRAKE = 3    /* IN1=IN2=1: short brake                     */
+} drv8871_drive_t;
+
 typedef struct
 {
 	TIM_HandleTypeDef *htim;   /* PWM timer (e.g. &htim3)            */
@@ -69,6 +82,11 @@ typedef struct
 	GPIO_TypeDef      *en_port;/* VM-enable GPIO port               */
 	uint16_t           en_pin; /* VM-enable GPIO pin                */
 	uint32_t           arr;    /* auto-reload (filled by Init)      */
+
+	/* ---- 관찰용 (RO). 위 명령 함수들이 갱신한다. --------------------- */
+	volatile uint8_t   drive;    /* drv8871_drive_t                   */
+	volatile uint8_t   duty_pct; /* Forward/Reverse 로 준 duty [%]    */
+	volatile uint8_t   vm_on;    /* 1 = EN HIGH (VM 인가됨)           */
 } DRV8871_HandleTypeDef;
 
 void DRV8871_Init(DRV8871_HandleTypeDef *h);

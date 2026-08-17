@@ -37,7 +37,8 @@ extern "C" {
  *
  * INT pin (pin 13, open-drain active-low): NOT routed to the MCU on this board
  * for U8/U9/U10. A hardware interrupt from the expander is therefore not
- * possible - the keypad is serviced by periodic polling (see membrane.h).
+ * possible - the keypad is serviced by periodic polling (see tb_tca9554.h; the
+ * generic membrane driver that used to do this was removed 2026-08-18).
  *
  * Register model (command byte selects the register; auto-increment is not
  * used - each access carries its own command byte):

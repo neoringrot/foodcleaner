@@ -67,10 +67,23 @@ void TB_Water_Init(void)
 	gpio_ctrl_off(GPIO_OUT_WATER_ON);
 }
 
-void TB_Water_Poll(void)
+void TB_Water_Poll(uint8_t tb_active)
 {
 	uint8_t l1;
 	uint8_t l2;
+
+	/* ★소유권 게이트(tb_heat 의 HT-POWER 와 같은 문제·같은 해법).
+	 * WATER-ON(PE2)은 모음/동작 시나리오도 쓰는 핀이다. 시나리오는 MotorTask 에서
+	 * 켜는데 이 함수는 defaultTask 에서 100ms 마다 돈다. 예전에는 게이트 없이
+	 * 호출되어, tb_water_enable=0(기본값)일 때 아래 분기가 매 틱 PE2 를 꺼 버렸다.
+	 * 실측: 모음 급수 단계에서 급수솔(PB13)은 ON 인데 급수메인(PE2)만 OFF 로
+	 * 보였다 - 앱이 잘못 읽은 게 아니라 실제로 꺼져 있었다.
+	 * 시나리오가 도는 동안에는 핀을 건드리지 않고 물러난다. */
+	if (!tb_active)
+	{
+		s_armed = 0;          /* 벤치로 돌아오면 새 기준선부터 잡는다 */
+		return;
+	}
 
 	/* Disabled: shut the supply off and stop monitoring. Keep the last snapshot
 	 * so it can still be inspected, and drop the armed state so re-enabling

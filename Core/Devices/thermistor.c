@@ -17,28 +17,47 @@
 /* ---- Smoothing (first-order complementary / EMA low-pass) ---------------
  * On top of the per-read 5-sample median above, Thermistor_Tick() folds each
  * new sample into a running value:  filt = filt*(1-a) + sample*a. This is the
- * "new = old*0.7 + input*0.3" idea (a = g_therm_filter_alpha, default 0.3).
+ * "new = old*0.6 + input*0.4" idea (a = g_therm_filter_alpha, default 0.4).
  *
  * WHY EMA (not a 100-sample moving average): O(1) state -- one float per channel
  * instead of a 100-deep ring per channel -- no buffer bookkeeping, tunable, and
- * for equal noise rejection it lags less. At the 100 ms tick, a=0.3 gives a time
+ * for equal noise rejection it lags less. At the 100 ms tick, a=0.4 gives a time
  * constant ~0.23 s (95% of a step in ~0.8 s): plenty fast for a thermal load,
  * yet it halves the sample-to-sample jitter that the coarse high-temp divider
  * resolution would otherwise show. Lower a = smoother/slower, higher a = livelier. */
-#define THERM_FILTER_ALPHA_DEFAULT  0.3f
+#define THERM_FILTER_ALPHA_DEFAULT  0.4f
 #define THERM_ERR_LIMIT             5u  /* consecutive bad reads before EMA -> error */
 
 /* ---- R-T lookup table (supersedes the single-Beta equation) ------------
- * Source: Adafruit "103_3950" 10K NTC lookup table (R25=10K, B25/50=3950),
- * https://cdn-shop.adafruit.com/datasheets/103_3950_lookuptable.pdf -- same
- * sensor family as the HCET-103F3950 fitted here (datasheet/온도센서.pdf:
- * R25=10K +/-1%, B25/50=3950 +/-1%).
+ * PRIMARY SOURCE (-40..150C): vendor R-T datasheet for the fitted NTC,
+ * "103 3950 -40~150C" batch A24-0428H-9 (R25=10.0K, B25/50=3950K) --
+ * Core/Scenario/"103 3950 -40~150℃xls...pdf". Every 10C row from -40..150C
+ * below is transcribed from that vendor table and was verified digit-for-digit.
+ *
+ * EXTENSION (160..220C): the vendor sheet STOPS at 150C, but the 동작 scenario
+ * must read up to 200C. The vendor's -40..150C data matches the Adafruit
+ * "103_3950" 10K/B3950 lookup table exactly, so the 160..200C rows are taken
+ * from that same curve (Adafruit, https://cdn-shop.adafruit.com/datasheets/
+ * 103_3950_lookuptable.pdf) -- vendor-UNVERIFIED. The 210C/220C rows are a
+ * short extrapolation of the curve's local Beta trend (~62->51->42 ohm), added
+ * ONLY for 200C headroom (see below). Treat anything above 150C as unverified
+ * until the vendor supplies >150C data.
+ *
+ * WHY HEADROOM ABOVE 200C: at 200C the NTC is ~62 ohm, so the 10k divider node
+ * sits near the rail (raw~4070/4095, only ~1C per ADC count). If the table
+ * ENDED at 200C, a single count of quantization reconstructs Rntc just below
+ * the 200C row and trips the off-table NAN guard -- i.e. a true 200C would read
+ * as a probe fault. The 210C/220C rows put 200C strictly INSIDE the
+ * interpolation range so it resolves instead of faulting. This does NOT improve
+ * the coarse high-temp resolution, which is a trait of the 10k divider (a
+ * smaller Rfixed is the hardware fix, out of scope here).
  *
  * WHY A TABLE: the old single-Beta model (T0=25C, B=3950) is only accurate in
  * the 20..60C band it is fitted to; measured against this table it OVER-reads
  * by ~+1.2C at 100C, ~+5.6C at 150C and ~+10.7C at 200C -- unacceptable for the
  * dryer/heater temperatures the 동작 scenario measures. Interpolating the real
- * curve holds the whole -40..200C range to ~0.1C.
+ * curve holds the whole -40..150C vendor range to ~0.1C (spot-checked against
+ * the vendor's 1C rows: true 25C -> 24.98C, true 45C -> 45.00C).
  *
  * INTERPOLATION: piecewise-linear in (ln R, 1/T[K]) -- i.e. a per-segment Beta
  * fit -- which is near-exact even at the 10C row spacing below (25C is NOT a
@@ -47,13 +66,17 @@
 typedef struct { int16_t t_c; float r_ohm; } therm_rt_t;
 static const therm_rt_t THERM_RT[] =
 {
+	/* -40..150C: vendor datasheet (batch A24-0428H-9), verified digit-for-digit */
 	{ -40, 277200.0f }, { -30, 157200.0f }, { -20, 87430.0f }, { -10, 51820.0f },
 	{   0,  31770.0f }, {  10,  19680.0f }, {  20, 12470.0f }, {  30,  8064.0f },
 	{  40,   5327.0f }, {  50,   3592.0f }, {  60,  2472.0f }, {  70,  1735.0f },
 	{  80,   1243.0f }, {  90,    908.3f }, { 100,  674.4f }, { 110,   508.3f },
 	{ 120,    383.5f }, { 130,    292.4f }, { 140,  225.8f }, { 150,   176.9f },
+	/* 160..200C: same curve via Adafruit 103_3950 -- vendor-UNVERIFIED */
 	{ 160,    141.0f }, { 170,    113.9f }, { 180,   92.8f }, { 190,    75.9f },
 	{ 200,     61.9f },
+	/* 210..220C: extrapolated for 200C interpolation headroom -- UNVERIFIED */
+	{ 210,     51.1f }, { 220,     42.4f },
 };
 #define THERM_RT_N  (sizeof(THERM_RT) / sizeof(THERM_RT[0]))
 
@@ -103,14 +126,14 @@ uint16_t Thermistor_ReadRaw(uint8_t idx)
 /* Convert an NTC resistance [ohm] to Celsius via the R-T table above,
  * interpolating piecewise-linearly in (ln R, 1/T[K]) -- locally a per-segment
  * Beta fit, so it is near-exact between rows. Returns NAN when R falls off
- * either end of the table (colder than -40C / hotter than 200C), which for
+ * either end of the table (colder than -40C / hotter than 220C), which for
  * this divider corresponds to an open or shorted probe. */
 static float therm_r_to_c(float r_ntc)
 {
 	uint8_t i;
 
 	/* Off the ends. R is DESCENDING, so > first row = too cold, < last = too hot.
-	 * Endpoints themselves are in range (strict compare), so exactly -40C / 200C
+	 * Endpoints themselves are in range (strict compare), so exactly -40C / 220C
 	 * still resolve instead of reading as a fault. */
 	if (r_ntc > THERM_RT[0].r_ohm || r_ntc < THERM_RT[THERM_RT_N - 1u].r_ohm)
 	{

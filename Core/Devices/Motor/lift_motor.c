@@ -62,3 +62,14 @@ void Lift_Stop(void)
 {
 	DRV8871_Coast(&lift);           /* IN1=IN2 low -> coast */
 }
+
+/* ---- 모니터링 read-only (protocol_r0 0x26 OUTPUT) -------------------- */
+uint8_t Lift_GetDrive(void)
+{
+	return lift.drive;
+}
+
+uint8_t Lift_GetDuty(void)
+{
+	return lift.duty_pct;
+}

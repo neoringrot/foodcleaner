@@ -34,7 +34,8 @@
 #include "lift_motor.h"
 #include "wifi.h"
 #include "ble.h"
-#include "membrane.h"
+#include "uart_ctrl.h"
+#include "protocol_r0.h"
 #include "lm4871.h"
 /* USER CODE END Includes */
 
@@ -124,19 +125,30 @@ int main(void)
   Lift_Init();
 
   /* Comms modules: arm the UART RX interrupts before the scheduler starts.
-   * WiFi_Init (ESP-AT on UART4) and BLE_Init (BoT-nLE521 on UART5) must run
-   * after MX_UART4_Init()/MX_UART5_Init() above. BLE_Init also drives
-   * o_BLE_MODE LOW to select the default BYPASS mode. */
+   * Must run after MX_UART4_Init()/MX_UART5_Init() above.
+   *   UART4 -> WiFi_Init (ESP-AT)
+   *   UART5 -> UartCtrl_Init (protocol_r0 transport)
+   *
+   * ★UART5: the ble.c driver is disabled as a whole (BLE_ENABLE=0 in ble.h).
+   * HAL allows only one armed RX per port, so the module that owns the data path
+   * must be the one that arms it, and here that owner is uart_ctrl (the R0 packet
+   * transport). The BoT-nLE521 needs no driver for this: in BYPASS mode it passes
+   * the HOST UART straight through to the app, and selecting BYPASS is just
+   * o_BLE_MODE LOW, done directly below. See ble.h for how to bring the driver
+   * back if AT-mode configuration is ever needed. */
   WiFi_Init();
-  BLE_Init();
+  gpio_ctrl_off(GPIO_OUT_BLE_MODE);   /* BoT-nLE521 BYPASS (was BLE_SetMode) */
+  UartCtrl_Init();
+  /* App-facing R0 protocol state (monitoring mask/period, RX decoder). Safe to
+   * init before the scheduler: it only touches its own context. */
+  Proto_Init();
 
-  /* Front-panel membrane keypad + LED latch on I2C1 (U8=DIS-LED @0x39,
-   * U9=DIS-SW @0x38). DISABLED: the tb_tca9554 testbed (Core/Testbench) now
-   * owns U8/U9 - it configures both expanders itself in TB_TCA9554_Init()
-   * (StartMotorTask, freertos.c) and would collide with this driver on the LED
-   * port and I2C bus. Re-enable this line and Membrane_Poll() in freertos.c to
-   * restore the generic press-to-toggle keypad behaviour. */
-  /* Membrane_Init(NULL); */
+  /* Front-panel keypad + LED latch on I2C1 (U8=DIS-LED @0x39, U9=DIS-SW @0x38):
+   * the generic press-to-toggle membrane driver (ExtGpio/membrane.*) was REMOVED
+   * on 2026-08-18 - the product does not control anything from these buttons.
+   * U8/U9 now have a single owner, the tb_tca9554 testbed, which configures both
+   * expanders itself in TB_TCA9554_Init() (StartMotorTask, freertos.c) and maps
+   * key presses to the BLDC test motors while in APP_MODE_TESTBENCH. */
 
   /* U15 LM4871 speaker amplifier driven by the DAC: PA4 (DAC_OUT1) -> Ci/Ri ->
    * -IN, shutdown on PA3 (o_EN_SPK, active-low). Must run after MX_DAC_Init()

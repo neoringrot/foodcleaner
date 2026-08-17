@@ -5,8 +5,8 @@
 #include "i2c.h"          /* hi2c1 */
 
 /* Front-panel keypad (U9) -> BLDC motor testbed. See tb_tca9554.h for the wiring,
- * the LED behaviour, the button->motor map and the single-owner constraint
- * against the membrane driver. Both motors are driven CLOSED-LOOP through
+ * the LED behaviour, the button->motor map and the single-owner note for U8/U9
+ * (the generic membrane driver is gone). Both motors are driven CLOSED-LOOP through
  * bldc_ctrl (M1 = g_grind_ctrl, M2 = g_stir_ctrl); this file only maps button
  * edges to BldcCtrl_Start/Stop/SpeedStep. */
 

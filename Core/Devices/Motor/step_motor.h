@@ -40,21 +40,23 @@ extern "C" {
  *    (p0,p1)(p1,p2)(p2,p3)(p3,p0), reproducing it exactly. Natural M1..M4 order
  *    rotates -- do NOT reorder STEP1.
  *
- * -- STEP2 (J33) = 35BYJ46-1014 (35BYJ46 family; -30 class, 24 V; RED = common,
- *    phases Orange/Yellow/Blue/Pink). Its lead connector does NOT match the board
- *    as received -- the leads came ordered PINK BLUE ORANGE RED YELLOW on pins
- *    1..5, i.e. RED (common) sat on pin4 (a low-side switch) and PINK (a phase)
- *    on pin1 (+24 V). That cannot work and MUST be re-pinned so RED -> pin1.
- *    RECOMMENDED re-pin (matches the 35BYJ46 A->B->C->D = Orange->Yellow->Blue->
- *    Pink ring, so the SAME k_step_seq / natural M1..M4 order rotates):
- *      pin1 RED / pin2 ORANGE(M1) / pin3 YELLOW(M2) / pin4 BLUE(M3) / pin5 PINK(M4)
- *    Web sources disagree on the Blue/Pink pairing, so treat this as the bring-up
- *    starting point: if STEP2 only buzzes/vibrates instead of turning, swap the
- *    pin4/pin5 wires (BLUE<->PINK) -- no firmware change needed either way.
+ * -- STEP2 (J33) = 35BYJ46-1014 (outline drawing 35BYJ46-210). CONFIRMED WORKING
+ *    on the bench 2026-08-15 by trial re-pinning. NOTE: this motor's common is
+ *    YELLOW, not red (the -210 datasheet lead colors do not follow the usual
+ *    "red = common" rule). Confirmed connector (rotates, natural M1..M4 order):
+ *      pin1 YELLOW(common +24V) / pin2 RED(M1) / pin3 ORANGE(M2) /
+ *      pin4 BLUE(M3) / pin5 PINK(M4)
+ *    => phase[] = {Red,Orange,Blue,Pink}, coils {Red,Blue} and {Orange,Pink},
+ *    Yellow = shared center tap. k_step_seq fires (M1,M2)(M2,M3)(M3,M4)(M4,M1) =
+ *    (Red,Orange)(Orange,Blue)(Blue,Pink)(Pink,Red), always mixing the two coils
+ *    -> rotates. Same firmware / natural handle order as STEP1; only the physical
+ *    crimp differs, so NO code change. (Earlier "red = common" guesses were wrong;
+ *    the bench elimination + final trial settled it. Flip tb_step2_dir for CW/CCW.)
  *
  * Each of the four pins energizes one motor phase: GPIO HIGH -> FDN337N gate
  * high -> low-side N-MOSFET on -> that winding end pulled to GND while the common
- * (RED, pin1) sits at +24 V (classic 5-wire unipolar; LL4148 flyback diodes to
+ * center tap (pin1; RED on STEP1, YELLOW on STEP2) sits at +24 V (classic 5-wire
+ * unipolar; LL4148 flyback diodes to
  * 24P0V catch each coil's turn-off spike). gpio.c already configures all eight
  * pins as push-pull outputs, LOW at boot (all coils released -- safe).
  *
@@ -82,15 +84,15 @@ extern "C" {
  *   Pull-in torque       >= 170 mN-m @ 330 PPS ; self-position >= 49 mN-m
  *   No-load pull-in/out  >= 400 / >= 600 Hz ; temp rise <= 75 K, noise <= 40 dB
  *
- * STEP2 = 35BYJ46-1014 (35BYJ46 family; "-1014" is a custom order code not in the
- *         public table -- specs taken from the 24 V/4-phase "-30" class, CONFIRM
- *         against the real label):
- *   Drive voltage        24 VDC
- *   Resistance           ~300 ohm/phase (25 C) -> ~80 mA/phase, ~160 mA/step
- *   Step angle / gear    7.5 deg (rotor) , ~1/85 gearbox
- *   OUTPUT steps/rev     360/7.5 * 85 ~= 4080 full-steps (~0.088 deg/step out)
- *   Torque               >= 127.4 mN-m ; self-lock >= 88.2 mN-m
- *   Start / operating    100 PPS start , >= 400 PPS operating ; noise < 40 dB
+ * STEP2 = 35BYJ46-1014 / outline drawing 35BYJ46-210. VOLTAGE: 24 V CONFIRMED
+ *         (2026-08-17, 회로 담당자). The 24 V / ~300 ohm variant is fitted ->
+ *         24 V / 300 = ~80 mA/phase (at rating), no overheating concern on the 24 V
+ *         rail. (A 12 V / 130 ohm -210 variant also exists in the wild; do NOT
+ *         substitute it -- on 24 V it would draw ~185 mA/phase = ~4x power and
+ *         overheat. Any replacement MUST be a 24 V 35BYJ46.)
+ *         Specs: step 7.5 deg (rotor), gear ~1/85 -> 360/7.5 * 85 ~= 4080
+ *         full-steps/rev (~0.088 deg/step out); pull-in torque >= 127.4 mN-m (24 V);
+ *         100 PPS self-start, >= 500 PPS pull-out.
  *
  * STEP-RATE LIMITS (open-loop, caller-enforced -- this driver does not gate the
  * rate; one StepMotor_Step() = one FULL step). The macros below are a CONSERVATIVE

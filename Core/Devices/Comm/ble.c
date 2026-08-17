@@ -3,7 +3,12 @@
 
 /* CHIPSEN BoT-nLE521 over UART5. See ble.h for the wiring, mode model and
  * protocol notes. BYPASS is the default and only mode this board runs in for
- * data; AT commands are used for bring-up/configuration while disconnected. */
+ * data; AT commands are used for bring-up/configuration while disconnected.
+ *
+ * ★이 파일 전체는 BLE_ENABLE(ble.h) 로 게이팅된다. 기본 0 = 비활성.
+ *   UART5 소유권이 uart_ctrl(R0 프로토콜 전송로)로 넘어갔기 때문이며, 되살리는
+ *   절차는 ble.h 의 BLE_ENABLE 주석에 정리해 두었다. 코드는 그대로 보존한다. */
+#if BLE_ENABLE
 
 #define BLE_UART        (&huart5)
 #define BLE_RX_BUFSZ    256U      /* power of two -> cheap mask */
@@ -228,3 +233,10 @@ ble_status_t BLE_Disconnect(uint32_t timeout_ms)
 {
 	return BLE_SendAT("AT+DISCONNECT", NULL, 0, timeout_ms);
 }
+
+#else  /* !BLE_ENABLE */
+
+/* 빈 번역단위(ISO C 위반)를 피하기 위한 더미 선언. 오브젝트 크기는 0 이다. */
+typedef int ble_disabled_translation_unit_t;
+
+#endif /* BLE_ENABLE */

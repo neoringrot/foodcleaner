@@ -28,11 +28,14 @@ extern "C" {
  * Because the divider top and the ADC reference are both 3.3V the result is
  * ratiometric, so Rntc follows from the raw count alone (Vref cancels):
  *   Rntc = Rfixed * (ADC_MAX - raw) / raw
- * Temperature then comes from an R-T LOOKUP TABLE (Adafruit 103_3950, the same
- * 10k / B3950 family), interpolated piecewise-linearly in (ln Rntc, 1/T). This
- * replaces the earlier single-Beta equation, which over-read by up to ~+10C at
- * dryer temperatures; the table holds -40..200C to ~0.1C. See thermistor.c for
- * the table and the accuracy rationale.
+ * Temperature then comes from an R-T LOOKUP TABLE, interpolated piecewise-
+ * linearly in (ln Rntc, 1/T). This replaces the earlier single-Beta equation,
+ * which over-read by up to ~+10C at dryer temperatures. The table's -40..150C
+ * rows are the VENDOR datasheet (batch A24-0428H-9, R25=10.0K/B3950), held to
+ * ~0.1C; 160..200C continue the same (Adafruit 103_3950) curve and 210/220C are
+ * extrapolated for 200C headroom -- all >150C rows are vendor-UNVERIFIED. Note
+ * 200C sits near ADC saturation (~1C/count) on this 10k divider. See
+ * thermistor.c for the table and the accuracy/headroom rationale.
  *
  * ADC access uses the shared adc_ctrl layer; call AdcCtrl_Init() once at
  * startup before Thermistor_Read*().
@@ -63,7 +66,7 @@ uint16_t Thermistor_ReadRaw(uint8_t idx);         /* 12-bit counts, 0 on error *
  * sensor task (StartDefaultTask, 100 ms) -- the EMA assumes a steady dt and one
  * writer. Then read the smoothed value via Get*; a brief bad-read glitch is
  * ridden out, a persistent fault (THERM_ERR_LIMIT ticks) surfaces as NAN/ERR. */
-extern volatile float g_therm_filter_alpha;       /* new-sample weight 0..1 (0.3) */
+extern volatile float g_therm_filter_alpha;       /* new-sample weight 0..1 (0.4) */
 
 void     Thermistor_Tick(void);                   /* read all ch once + update EMA */
 float    Thermistor_GetCelsius(uint8_t idx);      /* filtered, NAN on error/uninit */

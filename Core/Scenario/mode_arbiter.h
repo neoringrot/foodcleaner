@@ -14,7 +14,7 @@ extern "C" {
  *
  * 왜 필요한가(변경 전 문제):
  *   변경 전에는 Moeum_SenseTick()/Dongjak_SenseTick() 이 `g_app_mode` 로 게이팅
- *   되어 있었고, 시작 홀(HS2/HS5) 에지를 그 SenseTick 안에서만 읽었다. 즉
+ *   되어 있었고, 시작 홀(모음/동작) 에지를 그 SenseTick 안에서만 읽었다. 즉
  *   "이미 그 모드에 들어가 있어야만 그 모드의 시작 홀을 읽는" 순환 구조라,
  *   기본값 APP_MODE_TESTBENCH 상태에서는 마개를 아무리 돌려도 시작되지 않았다
  *   (모드 변경 수단은 디버거뿐). 또 SenseTick가 멈춰 있는 동안 hs_prev 가
@@ -30,15 +30,18 @@ extern "C" {
  *
  * 마개 위치 매핑 (U24 TCA9554A P0..P4 = HS1..HS5, tb_hallsensor.h와 동일):
  *   HS1 P0 = 강음   -> APP_MODE_KANGEUM (미구현 스텁 kangeum.c)
- *   HS2 P1 = 모음   -> APP_MODE_MOEUM
- *   HS3 P2 = 정지   -> 비상정지 후 대기(APP_MODE_TESTBENCH)
+ *   HS2 P1 = 동작   -> APP_MODE_DONGJAK
+ *   HS3 P2 = 정지   -> 비상정지 후 APP_MODE_JUNGJI (2026-08-25 신설)
  *   HS4 P3 = 배수   -> APP_MODE_BAESU   (미구현 스텁 baesu.c)
- *   HS5 P4 = 동작   -> APP_MODE_DONGJAK
+ *   HS5 P4 = 모음   -> APP_MODE_MOEUM
+ *   ★2026-08-25 변경: 마개 라벨 순서 재정의로 모음/동작이 맞바뀌었다
+ *     (구: HS2=모음 / HS5=동작). 홀 채널 배선은 그대로이고 라벨만 바뀐 것이라
+ *     펌웨어에서는 이 디코드 표와 *_HS_START_IDX 두 곳만 반대로 잡으면 된다.
  *   (HS6~HS8 = 교반원점/수거통/리프트하단. 마개 위치가 아니므로 여기서 무시.
  *    TODO: 이 3채널을 쓰는 기능은 별도 - 중재자 대상이 아님.)
  *
  * 정지 규칙(§ 기획서 4.5):
- *   - HS3 확정      -> Jungji_Request(HS_STOP, EMERGENCY) + 모드 대기로 복귀
+ *   - HS3 확정      -> Jungji_Request(HS_STOP, EMERGENCY) + APP_MODE_JUNGJI
  *   - 전 채널 미인식 -> 마개 열림/이탈 = Jungji_Request(HS_LOST, EMERGENCY).
  *                      모드는 바꾸지 않는다(마개가 없는 벤치에서 디버거 조작을
  *                      계속 쓸 수 있도록).
@@ -60,15 +63,33 @@ extern "C" {
  *   ModeArbiter_MotorTick()  - StartMotorTask(1ms).   모드와 무관하게 항상.
  * ========================================================================== */
 
-/* ---- 동작 모드 (g_app_mode) ---------------------------------------------- */
+/* ---- 동작 모드 (g_app_mode) ----------------------------------------------
+ * ★APP_MODE_JUNGJI(5) 신설 이유(2026-08-25): 그 전에는 HS3(정지)를 인식해도
+ *   g_app_mode 가 APP_MODE_TESTBENCH 로 돌아갔다. 그러면 "마개가 정지 위치에
+ *   있다"와 "부팅 직후 대기/벤치"가 같은 값 0 으로 보여, 디버거에서도 앱
+ *   STATUS 에서도 정지 상태를 구분할 수 없었다. 별도 값을 주어 모음/동작 등
+ *   실행 모드와도, 대기와도 구분되게 한다.
+ *   실행 성격은 대기와 같다(시나리오 tick 없음, 벤치 폴링은 유지) - 아래
+ *   AppMode_IsBenchIdle() 참조. 값만 다른 '보이는 정지 상태'다. */
 typedef enum
 {
 	APP_MODE_TESTBENCH = 0,   /* 대기/벤치: TB_*_Poll + 키패드 BLDC          */
-	APP_MODE_MOEUM     = 1,   /* 모음(헹굼 세척)   - HS2                     */
-	APP_MODE_DONGJAK   = 2,   /* 동작(건조/분쇄/배출) - HS5                  */
+	APP_MODE_MOEUM     = 1,   /* 모음(헹굼 세척)   - HS5                     */
+	APP_MODE_DONGJAK   = 2,   /* 동작(건조/분쇄/배출) - HS2                  */
 	APP_MODE_KANGEUM   = 3,   /* 강음(보정)  - HS1, 미구현 스텁              */
-	APP_MODE_BAESU     = 4    /* 배수(설거지 보조) - HS4, 미구현 스텁        */
+	APP_MODE_BAESU     = 4,   /* 배수(설거지 보조) - HS4, 미구현 스텁        */
+	APP_MODE_JUNGJI    = 5    /* 정지 - HS3. 비상정지 후 머무는 표시용 상태  */
 } app_mode_t;
+
+/* 시나리오가 액추에이터를 쥐고 있지 않은 모드인가(= 벤치가 공유 핀을 만져도
+ * 되는가). 대기(TESTBENCH)와 정지(JUNGJI) 둘 다 해당한다.
+ * TB_Heat_Poll / TB_Water_Poll 게이팅과 MotorTask 의 벤치 분기가 이 하나를
+ * 쓰도록 모아 두었다 - JUNGJI 신설로 세 곳이 각자 == APP_MODE_TESTBENCH 를
+ * 유지했다면 정지 상태에서 벤치 폴링만 조용히 죽었을 것이다. */
+static inline uint8_t AppMode_IsBenchIdle(app_mode_t m)
+{
+	return (uint8_t)((m == APP_MODE_TESTBENCH) || (m == APP_MODE_JUNGJI));
+}
 
 /* 중재자만 쓴다(읽기는 자유). 디버거에서 수동으로 바꾸려면 g_modearb.dbg_disable
  * 을 1로 두어 중재자가 되돌리지 않도록 할 것. */
@@ -79,10 +100,10 @@ typedef enum
 {
 	LID_POS_NONE = 0,   /* HS1~5 전부 미인식(마개 열림/이동 중)              */
 	LID_POS_KANGEUM,    /* HS1                                               */
-	LID_POS_MOEUM,      /* HS2                                               */
+	LID_POS_MOEUM,      /* HS5                                               */
 	LID_POS_JUNGJI,     /* HS3                                               */
 	LID_POS_BAESU,      /* HS4                                               */
-	LID_POS_DONGJAK,    /* HS5                                               */
+	LID_POS_DONGJAK,    /* HS2                                               */
 	LID_POS_MULTI       /* 2채널 이상 동시(홀 이상/과도구간)                 */
 } LidPos;
 
@@ -118,6 +139,10 @@ typedef struct
 	 * 끝난 뒤에 세운다. */
 	uint8_t           pend_heat;
 	volatile uint8_t  heat_wait;
+	/* ★식힘(DJ_COOLDOWN, cool_phase=1) 직행 요청. pend_heat 와 같은 규칙·같은
+	 * 소비 지점이다. 둘은 배타적이라 하나를 세우면 다른 하나를 지운다. */
+	uint8_t           pend_cool;
+	volatile uint8_t  cool_wait;
 
 	volatile uint8_t  dbg_disable;  /* 1 = 중재자 무력화(디버거 수동 모드)    */
 	volatile uint8_t  dbg_pos_force;/* LidPos 강제 주입(0=미사용, 홀 없이 시험) */
@@ -134,6 +159,11 @@ void   ModeArbiter_Init(void);
  *   skip_door=1 : 도어 대기까지 생략하고 '가열중'으로 즉시 진입
  * 모드가 동작이 아니면 먼저 전환한다. 성공 1 / 거절 0(중재자 무력화 시). */
 uint8_t ModeArbiter_RequestDongjakHeat(uint8_t skip_door);
+/* 동작 시나리오를 헹굼·건조 없이 식힘 교반(80℃ 미만)부터 시작한다(앱/벤치 전용).
+ * DJ_HEAT 직행과 같은 래치 규칙을 쓴다 - 모드 전환 정리(Jungji_StopAll ->
+ * Dongjak_Abort)가 g_dongjak.dbg_enter_cool 을 지우므로, 요청은 여기 pend_cool 에
+ * 담아 두었다가 전환·제동이 끝난 뒤에 세운다. 성공 1 / 거절 0(중재자 무력화 시). */
+uint8_t ModeArbiter_RequestDongjakCool(void);
 void   ModeArbiter_SenseTick(void);            /* 100ms, StartDefaultTask     */
 void   ModeArbiter_MotorTick(uint32_t now_ms); /* 1ms,  StartMotorTask        */
 LidPos ModeArbiter_GetPos(void);                /* 확정 위치                  */

@@ -256,7 +256,7 @@ void StartDefaultTask(void *argument)
      * smoothed temperature published just above. Passing testbench-active gates
      * it so it only drives HT-POWER outside the 동작 scenario, which otherwise
      * owns the pin from StartMotorTask. */
-    TB_Heat_Poll((uint8_t)(g_app_mode == APP_MODE_TESTBENCH));
+    TB_Heat_Poll(AppMode_IsBenchIdle(g_app_mode));
 
     /* Refresh the HS1..8 snapshot (bit i = HS(i+1) magnet present). U24 pulls
      * HALL-INT1 (PF9) low on any change; service that edge first for low
@@ -283,19 +283,20 @@ void StartDefaultTask(void *argument)
      * supply off. Reads the shared EXTI flags polled/cleared on this task.
      * Gated like TB_Heat_Poll: WATER-ON (PE2) is also driven by the Moeum/Dongjak
      * scenarios from StartMotorTask, so the bench only touches it when idle. */
-    TB_Water_Poll((uint8_t)(g_app_mode == APP_MODE_TESTBENCH));
+    TB_Water_Poll(AppMode_IsBenchIdle(g_app_mode));
 
     /* Enable-gated door-limit Hall monitor (testbed): set tb_doorhall_enable=1 in
-     * the debugger to refresh tb_wdoor_at_open/close, tb_tdoor_at_open/close,
-     * raw levels and falling-edge counts, 0 to stop. Input-only; reads the shared
-     * EXTI flags this task already polls. */
+     * the debugger to refresh tb_wdoor_at_open/close, tb_tdoor_at_open/close and
+     * the raw pin levels, 0 to stop. Input-only. Falling edges are NOT counted
+     * here - TB_DoorHall_OnEXTI() does that from the EXTI ISR (main.c router),
+     * so this poll only owns the level/at-limit snapshot. */
     TB_DoorHall_Poll();
 
     /* Mode arbiter. Runs on EVERY cycle, in every mode: it decodes the lid
      * position from the HS1..HS5 snapshot refreshed just above and decides the
-     * mode (HS2 모음 / HS5 동작 / HS1 강음 / HS4 배수) or requests a stop
-     * (HS3 정지, or the lid leaving every position). It only latches requests
-     * here; the switch itself is executed by ModeArbiter_MotorTick() on the
+     * mode (HS5 모음 / HS2 동작 / HS1 강음 / HS4 배수 / HS3 정지=APP_MODE_JUNGJI)
+     * or requests a stop (HS3, or the lid leaving every position). It only latches
+     * requests here; the switch itself is executed by ModeArbiter_MotorTick() on the
      * motor task. Must come AFTER HallSensor_Update() so it sees this cycle's
      * mask. */
     ModeArbiter_SenseTick();
@@ -310,6 +311,7 @@ void StartDefaultTask(void *argument)
       case APP_MODE_DONGJAK: Dongjak_SenseTick(); break;
       case APP_MODE_KANGEUM: Kangeum_SenseTick(); break;   /* 미구현 스텁 */
       case APP_MODE_BAESU:   Baesu_SenseTick();   break;   /* 미구현 스텁 */
+      case APP_MODE_JUNGJI:                                /* 정지(HS3): 대기와 동일 */
       case APP_MODE_TESTBENCH:
       default:                                    break;
     }
@@ -341,8 +343,14 @@ void StartDefaultTask(void *argument)
   * @brief  Function implementing the Motor_Task thread. Owns every motor
   *         testbed. Set the matching enable flag in the debugger to run a
   *         motor, clear it to stop:
-  *           tb_wdoor_enable / tb_tdoor_enable -> DRV8871 doors (U5 / U7)
-  *           tb_step1_enable / tb_step2_enable -> steppers STEP1 / STEP2
+  *           tb_wdoor_enable / tb_tdoor_enable -> DRV8871 doors (U5 / U7);
+  *                                stop themselves at the Hall limit for the
+  *                                direction driven (tb_*_limit_stop=1 default,
+  *                                result in tb_*_limit_hit)
+  *           tb_step1_enable / tb_step2_enable -> steppers STEP1 / STEP2; both
+  *                                are TIMED one-shots that self-clear the flag:
+  *                                STEP1 runs 15 s, STEP2 runs 2 s for dir=1
+  *                                (닫힘) and 1 s for dir=0 (열림)
   *           g_grind_ctrl (M1/U11) & g_stir_ctrl (M2/U16) -> DRV8306 BLDC, both
   *                                                CLOSED-LOOP: drive from the
   *                                                keypad (odd SW=M1, even SW=M2)
@@ -451,6 +459,10 @@ void StartMotorTask(void *argument)
       case APP_MODE_DONGJAK: MotorTask_RunDongjak(now); break;
       case APP_MODE_KANGEUM: MotorTask_RunKangeum(now); break;
       case APP_MODE_BAESU:   MotorTask_RunBaesu(now);   break;
+      /* 정지(HS3)는 대기와 같은 벤치 분기로 간다. HS3 이후 대기로 돌아가던
+       * 종전 동작과 동일하게 두기 위함이다 - JUNGJI 는 '보이는 상태'일 뿐
+       * 실행 성격을 바꾸지 않는다(mode_arbiter.h app_mode_t 주석 참조). */
+      case APP_MODE_JUNGJI:
       case APP_MODE_TESTBENCH:
       default:               MotorTask_RunTestbench(now); break;
     }

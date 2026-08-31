@@ -37,6 +37,7 @@
 #include "uart_ctrl.h"
 #include "protocol_r0.h"
 #include "lm4871.h"
+#include "tb_doorhall.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -234,7 +235,10 @@ void SystemClock_Config(void)
   *         HAL_GPIO_EXTI_Callback in the image, so this is the central router:
   *           1) latch the per-pin gpio_ctrl flag for ALL EXTI pins (not consumed
   *              yet - reserved for future edge handling);
-  *           2) forward the M1/M2 FGOUT and nFAULT lines to their DRV8306
+  *           2) hand the edge to the door-limit Hall testbed, which counts and
+  *              timestamps the four WHALL/THALL lines here in ISR context (it
+  *              self-filters by pin and is a no-op while disabled);
+  *           3) forward the M1/M2 FGOUT and nFAULT lines to their DRV8306
   *              instance so tacho counting / fault latching keep working.
   * @param  GPIO_Pin : the pin (GPIO_PIN_x) that triggered the interrupt
   * @retval None
@@ -242,6 +246,8 @@ void SystemClock_Config(void)
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
   gpio_ctrl_exti_dispatch(GPIO_Pin);
+
+  TB_DoorHall_OnEXTI(GPIO_Pin);   /* PF2..PF5 door-limit Halls, falling edge */
 
   switch (GPIO_Pin)
   {

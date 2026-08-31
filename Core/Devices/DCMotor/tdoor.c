@@ -26,8 +26,8 @@ void TDoor_Disable(void)
 	DRV8871_Disable(&tdoor);
 }
 
-/* Direction mapping is provisional (see tdoor.h) -- swap Forward/Reverse here
- * if the door opens the wrong way on the bench. */
+/* Direction mapping confirmed on the bench 2026-08-25 (see tdoor.h):
+ * Forward = 열림, Reverse = 닫힘. */
 void TDoor_Open(uint8_t duty_pct)
 {
 	DRV8871_Forward(&tdoor, duty_pct);
@@ -58,6 +58,31 @@ uint8_t TDoor_AtOpen(void)
 uint8_t TDoor_AtClose(void)
 {
 	return (gpio_ctrl_exti_read(GPIO_EXTI_THALL_CLOSE) == DOOR_LIMIT_ACTIVE_HIGH) ? 1U : 0U;
+}
+
+/* Arrival latch (see tdoor.h / wdoor.h): arm at move start, then test
+ * edge-or-level. The falling-edge flags are latched in EXTI ISR context by
+ * gpio_ctrl_exti_dispatch(), so a limit that is only passed through is caught. */
+void TDoor_LimitArm(void)
+{
+	gpio_ctrl_exti_flag_clear(GPIO_EXTI_THALL_OPEN);
+	gpio_ctrl_exti_flag_clear(GPIO_EXTI_THALL_CLOSE);
+}
+
+uint8_t TDoor_ReachedOpen(void)
+{
+#if (DOOR_LIMIT_USE_EDGE && (DOOR_LIMIT_ACTIVE_HIGH == 0U))
+	if (gpio_ctrl_exti_flag_get(GPIO_EXTI_THALL_OPEN)) { return 1U; }
+#endif
+	return TDoor_AtOpen();
+}
+
+uint8_t TDoor_ReachedClose(void)
+{
+#if (DOOR_LIMIT_USE_EDGE && (DOOR_LIMIT_ACTIVE_HIGH == 0U))
+	if (gpio_ctrl_exti_flag_get(GPIO_EXTI_THALL_CLOSE)) { return 1U; }
+#endif
+	return TDoor_AtClose();
 }
 
 /* ---- 모니터링 read-only (protocol_r0 0x26 OUTPUT) -------------------- */

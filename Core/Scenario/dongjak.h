@@ -109,7 +109,7 @@ extern "C" {
 
 /* ---- 절대 경과시간 마커 (ms, 시나리오 시작 기준) ----------------------- */
 #ifndef DJ_T_HISPEED_MS
-#define DJ_T_HISPEED_MS         (110UL * 60000UL) /* 110분: 분쇄 2000 역회전 + 교반 27RPM */
+#define DJ_T_HISPEED_MS         (110UL * 60000UL) /* 110분: 분쇄 2000 역회전 + 교반 40RPM */
 #endif
 #ifndef DJ_T_COOLDOWN_MS
 #define DJ_T_COOLDOWN_MS        (120UL * 60000UL) /* 120분: 식힘 시작          */
@@ -128,13 +128,22 @@ extern "C" {
 
 /* ---- 초기 헹굼/배수 (docx 2단계 2·3번) ---------------------------------
  * 헹굼 2회는 고정 상수(rinse_iter 변수 폐지) - 1차/2차를 별도 상태로 언롤.
- * docx/모음은 교반 2분30초지만 동작 헹굼은 2분. 배수는 교반하며 진행:
+ * 모음 헹굼 교반은 사이클수 기준(11사이클 x 13s = 143초)이고 동작 헹굼은 시간 기준
+ * (2분 이하의 정수 사이클 = 117초)이다. 배수는 교반하며 진행:
  *   1차 30초(물빼기), 2차 90초(물빼기 30초 + 잔수 60초) -> 별도 DJ_DRAIN_RESIDUAL 폐지. */
 #ifndef DJ_RINSE_COUNT
 #define DJ_RINSE_COUNT          2U        /* 헹굼 2회 (고정; 상태 언롤로 관리) */
 #endif
 #ifndef DJ_RINSE_STIR_MS
-#define DJ_RINSE_STIR_MS        120000UL  /* 헹굼 교반 2분(동작 전용, 모음=2분30초) */
+#define DJ_RINSE_STIR_MS        117000UL  /* 헹굼 교반 117초 = 13s x 9 사이클.
+                                           * ★동작 전용 기준은 여전히 '2분'이고
+                                           * (2026-08-15 사용자 지정), 2026-08-26
+                                           * 사이클이 13s 가 되면서 2분(120s)에서
+                                           * 끊으면 9.2사이클째 중간에 교반이
+                                           * 멎는다. 그래서 2분을 넘지 않는 정수
+                                           * 사이클로 내렸다: floor(120/13)=9
+                                           * -> 117초. 모음은 사이클수 기준
+                                           * (MOEUM_STIR_CYCLES)이라 방식이 다르다. */
 #endif
 #ifndef DJ_RINSE1_DRAIN_MS
 #define DJ_RINSE1_DRAIN_MS      30000UL   /* 1차 배수 교반 30초(물빼기)       */
@@ -188,7 +197,8 @@ extern "C" {
 /* 배출문(TDoor) 개폐 중 THALL 리미트 미인식 시 처리.
  *   1 = 타임아웃 없이 리미트 인식까지 계속 구동(신지시 - 배출에서 DJ_ERROR로
  *       전체 프로세스를 멈추지 않는다). 기본.
- *   0 = DJ_DOOR_TIMEOUT_MS(15s) 후 DJ_ERROR(DJ_ERR_DISCH_OPEN/CLOSE).
+ *   0 = (구 동작) 고정 타임아웃 후 DJ_ERROR(DJ_ERR_DISCH_OPEN/CLOSE). 도어 완료
+ *       판정이 tdoor.h TDOOR_*_MAX_MS(14.3s) 상한으로 옮겨져 지금은 쓰이지 않는다.
  * ⚠ 1일 때: 리미트/자석 고장이면 DC 모터가 스톨 상태로 계속 구동된다. 개방은
  *   135분 백스톱이 회수하지만(최대 DJ_DISCH_WINDOW_MS=5분), 닫기는 시간 상한이
  *   없어 DRV8871 전류제한/열보호와 정지버튼(Dongjak_RequestStop)에만 의존한다.
@@ -222,21 +232,38 @@ extern "C" {
 #endif
 
 /* ---- RPM (분쇄=모터RPM, 교반=출력RPM) ---------------------------------- */
+/* ★2026-08-26: 패턴 교반(건조 / 식힘 80℃미만 / 배출)을 20RPM -> 30RPM 으로 통일.
+ * 이제 이 셋과 헹굼이 전부 30RPM CW6/정지1/CCW6(1cycle 13초)로 같다.
+ * 예외 2가지만 기억하면 된다:
+ *   - 110분↑ 건조 교반  = DJ_STIR_RPM_HISPEED (40)
+ *   - 식힘 80℃'이상' 지속CW = DJ_COOL_HOT_STIR_RPM (20, 미변경) */
 #ifndef DJ_STIR_RPM
-#define DJ_STIR_RPM             20U       /* 건조 교반 ~20RPM (110분 전)       */
+#define DJ_STIR_RPM             30U       /* 패턴 교반 공통 30RPM (110분 전)   */
 #endif
-/* 신스펙 항목3: 110분부터 교반 속도만 27RPM으로 변경(패턴은 건조와 동일). */
+/* 110분부터 교반 속도만 올린다(패턴은 동일).
+ * 이력: 신스펙 항목3(2026-08-15) 20->27 -> 2026-08-26 사용자 지시로 27->40. */
 #ifndef DJ_STIR_RPM_HISPEED
-#define DJ_STIR_RPM_HISPEED     27U       /* 110분↑ 교반 27RPM                 */
+#define DJ_STIR_RPM_HISPEED     40U       /* 110분↑ 교반 40RPM                 */
+#endif
+/* 식힘 진입 직후(온도 80℃ 이상, cool_phase=0) 의 "지속 CW" 전용 RPM.
+ * 2026-08-26 지시는 '식힘 교반(80℃ 미만)'을 명시했으므로 이 구간은 20RPM 유지다.
+ * 그전에는 DJ_STIR_RPM 을 같이 썼는데, 그 값이 30 으로 오르면서 분리했다. */
+#ifndef DJ_COOL_HOT_STIR_RPM
+#define DJ_COOL_HOT_STIR_RPM    20U       /* 식힘 80℃↑ 지속CW 20RPM(미변경)   */
 #endif
 /* 기획서 4.2: "부하가 크면 약 30RPM 검토". 부하감지(4.6)는 별도 미구현 서브시스템
- * 이라 현재 스위칭 소스가 없어 대기 상태(값만 기록). 부하감지 구현 시 교반 목표를
- * 이 값으로 올리도록 연동. */
+ * 이라 현재 스위칭 소스가 없어 대기 상태(값만 기록).
+ * ⚠️ 2026-08-26 기준 상시 RPM 이 이미 30 이라 이 값은 더 이상 '증속'이 아니다.
+ * 부하감지를 구현할 때 목표값부터 다시 정할 것. */
 #ifndef DJ_STIR_RPM_HILOAD
 #define DJ_STIR_RPM_HILOAD      30U       /* (대기) 부하 큼 감지 시 교반 RPM   */
 #endif
+/* ★헹굼 교반 이력: 25RPM CW3/정지1/CCW3(1cycle 7s)
+ *   -> 2026-08-25 30RPM CW4/정지1/CCW4(1cycle 9s)
+ *   -> 2026-08-26 30RPM CW6/정지1/CCW6(1cycle 13s)  ← 현재. 모음과 같은 구간.
+ *   식힘/배출 교반(DJ_S313_*)은 바뀌지 않으므로 구간 상수를 분리해 두었다. */
 #ifndef DJ_RINSE_STIR_RPM
-#define DJ_RINSE_STIR_RPM       25U       /* 헹굼 교반 ~25RPM(1단계 동일)     */
+#define DJ_RINSE_STIR_RPM       30U       /* 헹굼 교반 ~30RPM(1단계 동일)     */
 #endif
 #ifndef DJ_GRIND_COARSE_RPM
 #define DJ_GRIND_COARSE_RPM     1500U     /* 1차 분쇄 CW                      */
@@ -249,15 +276,18 @@ extern "C" {
 #endif
 
 /* ---- 서브-패턴 구간(ms) ------------------------------------------------ */
-#define DJ_STIR_FWD_MS          3000U     /* 건조 교반 CW 구간(정회전 3초)     */
-#define DJ_STIR_STOP_MS         2000U     /* 건조 교반 정지 구간(정지 2초)     */
-#define DJ_STIR_REV_MS          3000U     /* 건조 교반 CCW 구간(역회전 3초)    */
-/* 신스펙: 건조 교반 = "CW 3초 + 정지 2초 ×5회 → CCW 3초, 반복"(=REPS 5).
- * (이전 기획서 단순 3-phase REPS 1에서 재정정, 2026-08-15 신스펙 항목1) */
-#define DJ_STIR_FWD_REPS        5U        /* CW/정지 5회 후 CCW (신스펙)       */
-#define DJ_S313_CW_MS           3000U     /* 식힘/배출 교반 CW 구간           */
-#define DJ_S313_STOP_MS         1000U     /* 식힘/배출 교반 정지 구간         */
-#define DJ_S313_CCW_MS          3000U     /* 식힘/배출 교반 CCW 구간          */
+/* ★2026-08-26: 건조 교반의 "CW3/정지2 ×5회 -> CCW3"(패턴 A)를 폐지하고,
+ * 식힘/배출과 같은 3구간 패턴으로 통일했다. 그래서 DJ_STIR_FWD_MS/STOP_MS/
+ * REV_MS/FWD_REPS 와 그 전용 FSM(dj_stir_dry_*), 반복 카운터 stir_reps 가
+ * 함께 제거됐다. 건조도 이제 DJ_S313_* 를 쓴다. */
+#define DJ_S313_CW_MS           6000U     /* 건조/식힘/배출 교반 CW 구간(6초) */
+#define DJ_S313_STOP_MS         1000U     /* 건조/식힘/배출 교반 정지 구간    */
+#define DJ_S313_CCW_MS          6000U     /* 건조/식힘/배출 교반 CCW 구간(6초)*/
+/* 헹굼 교반(1·2차 교반 헹굼 + 그 배수 교반)은 식힘/배출과 구간이 다르다.
+ * 2026-08-26: CW 6s / 정지 1s / CCW 6s = 1cycle 13s, 30RPM. */
+#define DJ_RINSE_CW_MS          6000U     /* 헹굼 교반 CW 구간                */
+#define DJ_RINSE_STOP_MS        1000U     /* 헹굼 교반 정지 구간              */
+#define DJ_RINSE_CCW_MS         6000U     /* 헹굼 교반 CCW 구간               */
 #define DJ_GRIND_RUN_MS         3000U     /* 1차 분쇄 구동 구간(CW)           */
 #define DJ_GRIND_STOP_MS        2000U     /* 1차 분쇄 정지 구간               */
 /* 110분↑ 고속(2000 CCW): 신스펙 "역회전 4초 / 정지 2초" 반복. 단, 최초 진입 시
@@ -267,7 +297,7 @@ extern "C" {
 #define DJ_GRIND_FINAL_DECEL_MS 1500U     /* 최초 역회전 전 감속 대기(1.5초)  */
 #define DJ_GRIND_RUN_FINAL_MS   4000U     /* 2000 CCW 구동 4초                */
 #define DJ_GRIND_STOP_FINAL_MS  2000U     /* 2000 CCW 정지 2초                */
-/* 헹굼 교반은 식힘/배출과 동일한 313 패턴(DJ_S313_*)을 재사용한다. */
+/* 헹굼 교반은 313 과 같은 3구간 패턴이지만 구간 길이/RPM 이 다르다(DJ_RINSE_*). */
 
 /* ---- 팬 (docx 7번) -----------------------------------------------------
  * 팬 3개 역할(2026-08-17 재정의):
@@ -286,8 +316,26 @@ extern "C" {
 #endif
 
 /* ---- 스테퍼 (냄새 관로=STEP1, 흡입제어=STEP2 / 역할 TBD) --------------- */
+/* ★2026-08-25 개폐 종료 조건을 "스텝수" -> "구동시간"으로 변경.
+ * 벤치(tb_stepmotor)에서 실기구로 확정·빌드검증한 값과 동일하게 맞춘다:
+ *   STEP1(관로) : 방향 무관 15초        (tb_step1_run_ms)
+ *   STEP2(흡입) : 열림 1초 / 닫힘 2초   (tb_step2_run_open_ms / _close_ms)
+ * 기구에 스토퍼가 있어 "시간"이 스펙이고 스텝수는 페이싱에 딸린 부산물이므로,
+ * 아래 DJ_STEP*_MS 가 1차 기준이다. 페이싱(DJ_STEP*_INTERVAL_MS)을 바꾸면 같은
+ * 시간 안에 밟는 스텝수(=이동량)가 함께 바뀌니 페이싱 변경 시 재확인할 것. */
+#ifndef DJ_STEP1_RUN_MS
+#define DJ_STEP1_RUN_MS         15000U    /* STEP1 관로 개/폐 각 15초         */
+#endif
+#ifndef DJ_STEP2_OPEN_MS
+#define DJ_STEP2_OPEN_MS        1000U     /* STEP2 흡입 열림 1초              */
+#endif
+#ifndef DJ_STEP2_CLOSE_MS
+#define DJ_STEP2_CLOSE_MS       2000U     /* STEP2 흡입 닫힘 2초              */
+#endif
+/* [폐지 2026-08-25] 개폐 종료가 시간 기준으로 바뀌어 더 이상 참조되지 않는다.
+ * 값을 바꿔도 동작이 바뀌지 않으니 위 DJ_STEP*_MS 를 고칠 것. */
 #ifndef DJ_DUCT_STEPS
-#define DJ_DUCT_STEPS           512U      /* 관로 완전개폐 스텝수(TBD)        */
+#define DJ_DUCT_STEPS           512U      /* (구) 관로 완전개폐 스텝수        */
 #endif
 /* 스텝 간격: 2ms(500PPS)는 STEP2(35BYJ46) run 한계(~400PPS)를 넘겨 탈조 → 회전 안 함.
  * 테스트벤치 검증 3ms(333PPS)로 맞춤(STEP_MOTOR_RUN_PPS_MAX=400 이내). 실부하에서
@@ -306,11 +354,14 @@ extern "C" {
 #define DJ_STEP_RAMP_STEPS      40U       /* 가속 구간 스텝수(→333PPS)        */
 #endif
 /* STEP2(흡입, 35BYJ46)는 STEP1(24BYJ48)보다 기동토크 여유가 작고, DJ_HEAT 구간엔
- * 분쇄·교반 BLDC가 같은 24V 레일을 함께 쓴다. 무부하 testbench(3ms)에선 돌지만
- * 실부하+동시통전에선 탈조("진동만")하므로 STEP2 전용으로 더 보수적 페이싱을 쓴다.
- * (run 6ms=167PPS / start 20ms=50PPS. STEP1은 위 3/10ms 유지.) */
+ * 분쇄·교반 BLDC가 같은 24V 레일을 함께 쓴다. 그래서 한때 run 6ms(167PPS)로
+ * 디레이팅했으나, ★2026-08-25 개폐 종료가 "시간"(열림 1s/닫힘 2s) 기준으로 바뀌면서
+ * 느린 페이싱이 곧 이동량 부족을 뜻하게 됐다 → 벤치 확정값과 같은 run 3ms(333PPS)로
+ * 되돌린다(사용자 지시). 시작 간격 20ms(50PPS) 램프는 자기기동 여유로 유지.
+ * 실부하에서 다시 탈조("진동만")하면 6ms로 되돌리고 대신 DJ_STEP2_OPEN_MS/_CLOSE_MS를
+ * 늘려 이동량을 보전할 것. (STEP1은 위 3/10ms 그대로.) */
 #ifndef DJ_STEP2_INTERVAL_MS
-#define DJ_STEP2_INTERVAL_MS    6U        /* STEP2 run 간격(167PPS)           */
+#define DJ_STEP2_INTERVAL_MS    3U        /* STEP2 run 간격(333PPS, 벤치와 동일) */
 #endif
 #ifndef DJ_STEP2_START_MS
 #define DJ_STEP2_START_MS       20U       /* STEP2 시작 간격(50PPS)           */
@@ -334,10 +385,13 @@ extern "C" {
 #endif
 
 /* ---- 시작 홀 채널 / 온도 채널 / 수위 정책 (TBD, 모음과 동일 기조) ------ */
+/* ★2026-08-25: 마개 라벨 순서 재정의로 동작이 HS5 -> HS2 로 옮겨졌다(모음과 맞교환).
+ * 배선은 그대로이고 라벨만 바뀐 것이라 이 인덱스와 mode_arbiter.c 디코드 표만
+ * 반대로 잡으면 된다. */
 #ifndef DJ_HS_START_IDX
-#define DJ_HS_START_IDX         4U        /* 동작 = HS5 (U24 P4, 0-based)     */
+#define DJ_HS_START_IDX         1U        /* 동작 = HS2 (U24 P1, 0-based)     */
 #endif
-/* 시작 트리거(HS5 상승에지)를 이 파일 안에서 볼지 여부. 기본 0 = 중재자
+/* 시작 트리거(HS2 상승에지)를 이 파일 안에서 볼지 여부. 기본 0 = 중재자
  * (mode_arbiter.c)가 HS1~5를 항상 디코딩해 모드 전환/Dongjak_Start()/마개 이탈
  * 정지를 담당한다. 자세한 배경은 moeum.h MOEUM_HS_TRIGGER_INTERNAL 주석 참조.
  * 어느 쪽이든 dbg_force_start(벤치 강제 시작)는 항상 유효하다. */
@@ -368,39 +422,25 @@ extern "C" {
 #define DJ_WATER_ACTIVE_LOW     1
 #endif
 
-/* ---- 안전 타임아웃 (스펙 외 placeholder) ------------------------------- */
-#ifndef DJ_DOOR_TIMEOUT_MS
-#define DJ_DOOR_TIMEOUT_MS      15000U
-#endif
+/* ---- 안전 타임아웃 ------------------------------------------------------ */
+/* [삭제 2026-08-25] 도어의 duty/구동시간/리미트 처리는 전부 wdoor.h 의 WDOOR_* 와
+ * tdoor.h 의 TDOOR_* 프로파일이 단일 출처다(테스트벤치 tb_drv8871과 동일 값·동일
+ * 규칙). 여기 있던 DJ_DOOR_TIMEOUT_MS / DJ_DOOR_LIMIT_OPTIONAL / DJ_DOOR_BENCH_MS /
+ * DJ_TDOOR_LIMIT_OPTIONAL 은 참조처가 없는 채로 남아 "여기를 고치면 된다"고 오해를
+ * 주기에 지웠다. 도어 동작을 바꾸려면 wdoor.h / tdoor.h 를 고칠 것.
+ *   배수문 : 닫힘 Forward 80% / 4.2s 종료, 열림 Reverse 킥80%(2s)->65% / 상한 6s
+ *   배출문 : 열림 Forward / 닫힘 Reverse, 80% 고정, THALL 인식 후 1s 추가회전,
+ *            방향별 상한 14.3s
+ * ★리미트 미인식은 더 이상 DJ_ERROR 가 아니다 - 시간으로 정상 종료한다. 그래서
+ *   DJ_ERR_RINSE_CLOSE/OPEN, DJ_ERR_HEAT_DOOR, DJ_ERR_DISCH_* 는 현재 발생 지점이
+ *   없다(DjErrCode 값은 앱과 공유하므로 남겨 둔다). 미인식 자체는 앱 검증표의
+ *   '도어 열림/닫힘 인식' 항목이 유일한 감지 수단이다. */
 #ifndef DJ_FILL_TIMEOUT_MS
 #define DJ_FILL_TIMEOUT_MS      120000UL
 #endif
 
-/* 도어 리미트(WHALL/THALL, PF3/PF4/PF2/PF5) 처리 모드. 모음(MOEUM_DOOR_LIMIT_
- * OPTIONAL)과 동일 기조.
- *   0 = 정상/스펙: 리미트 인식으로만 다음 단계 진행, 미도달 시 DJ_DOOR_TIMEOUT_MS
- *       후 DJ_ERROR (리미트 홀 게이팅). ← 실동작/검증 기본.
- *   1 = 벤치 육안 전용: 리미트 미도달 시에도 ERROR 대신 DJ_DOOR_BENCH_MS 만큼만
- *       구동 후 진행(센서 무시). 리밋홀 HW 검증 전 문 동작 관찰용 임시. */
-#ifndef DJ_DOOR_LIMIT_OPTIONAL
-#define DJ_DOOR_LIMIT_OPTIONAL  0
-#endif
-#ifndef DJ_DOOR_BENCH_MS
-#define DJ_DOOR_BENCH_MS        4000U    /* (육안모드) 리미트 무시 시 도어 구동 관찰 시간 */
-#endif
-/* 배출문(TDoor) 전용 리미트 게이트 모드. 배출문 리미트는 THALL_OPEN(PF5)/
- * THALL_CLOSE(PF2). ★2026-08-16 THALL 리미트 있음 확인 -> 기본 0(리미트 게이팅).
- *   0 = 정상: THALL 인식으로만 다음 단계 진행, 미도달 시 DJ_DOOR_TIMEOUT_MS 후
- *       DJ_ERROR(배출 OPEN/CLOSE 코드). ← 실동작/검증 기본.
- *   1 = (벤치, THALL 미배선 시) 리미트 미도달이라도 DJ_DOOR_BENCH_MS 후 진행.
- * 배출문 개폐 방향/THALL 극성이 틀리면 0에서 리미트 미도달→타임아웃→DJ_ERROR 낙하
- * 하므로, 방향(TDoor_Open/Close)·DOOR_LIMIT_ACTIVE_HIGH를 벤치에서 확인할 것. */
-#ifndef DJ_TDOOR_LIMIT_OPTIONAL
-#define DJ_TDOOR_LIMIT_OPTIONAL 0
-#endif
-
 /* ---- 4.5 추가 투입 금지 / 비상 정지 (기획서 4.5) ----------------------- *
- * 처리 중 투입구 마개가 동작 위치를 벗어나면(=시작 홀 HS5 이탈) 즉시 전 액추에이터
+ * 처리 중 투입구 마개가 동작 위치를 벗어나면(=시작 홀 HS2 이탈) 즉시 전 액추에이터
  * 정지 후 안전 상태로. 고온이면 냉각팬만 유지하며 식힘(DJ_ABORTED).
  *   - 벤치 강제시작(dbg_force_start)은 HS 없이 돌 수 있어 lid 감시를 무장하지 않음.
  *   - 단발 글리치 오정지 방지: HS LOW를 DJ_LID_CONFIRM_SAMPLES회(100ms 주기) 연속
@@ -423,13 +463,13 @@ typedef enum
 	DJ_RINSE1_CLOSE,      /* 1차 배수문 닫힘 구동 -> W-HALL-CLOSE 대기          */
 	DJ_RINSE1_FILL,       /* 1차 급수밸브 ON -> 수위 감지 대기                  */
 	DJ_RINSE1_FILL_EXTRA, /* 1차 수위 후 2초 추가급수 -> 밸브 OFF              */
-	DJ_RINSE1_STIR,       /* 1차 교반 CW3/정지1/CCW3 2분 헹굼(패턴B)            */
+	DJ_RINSE1_STIR,       /* 1차 교반 CW6/정지1/CCW6 117초 헹굼(패턴B)          */
 	DJ_RINSE1_OPEN,       /* 1차 배수문 열림 구동 -> W-HALL-OPEN 대기           */
 	DJ_RINSE1_DRAIN,      /* 1차 배수 교반 30초 -> 2차 시작                     */
 	DJ_RINSE2_CLOSE,      /* 2차 배수문 닫힘 구동 -> W-HALL-CLOSE 대기          */
 	DJ_RINSE2_FILL,       /* 2차 급수밸브 ON -> 수위 감지 대기                  */
 	DJ_RINSE2_FILL_EXTRA, /* 2차 수위 후 2초 추가급수 -> 밸브 OFF              */
-	DJ_RINSE2_STIR,       /* 2차 교반 CW3/정지1/CCW3 2분 헹굼(패턴B)            */
+	DJ_RINSE2_STIR,       /* 2차 교반 CW6/정지1/CCW6 117초 헹굼(패턴B)          */
 	DJ_RINSE2_OPEN,       /* 2차 배수문 열림 구동 -> W-HALL-OPEN 대기           */
 	DJ_RINSE2_DRAIN,      /* 2차 배수 교반 90초(잔수 포함) -> HEAT              */
 	DJ_HEAT,           /* 건조: 히터+교반+분쇄+수증기+팬 동시(온도/시간 게이팅)*/
@@ -473,6 +513,7 @@ typedef struct
 	volatile uint8_t  start_req;
 	volatile uint8_t  dbg_force_start;/* 벤치 강제 시작(1회성, HS와 OR)       */
 	volatile uint8_t  dbg_enter_heat; /* [디버그] DJ_HEAT 점프(1=도어대기부터/2=도어생략) 1회성 */
+	volatile uint8_t  dbg_enter_cool; /* [디버그] DJ_COOLDOWN(식힘 80℃미만) 점프 1회성 */
 	volatile uint8_t  dbg_beep;       /* [TEST] N 쓰면 즉시 N회 비프(오디오 경로 확인) 1회성 */
 	volatile int16_t  temp_d10;       /* 처리통 온도 CH0=THERM1(히터/분쇄/식힘, 에러 시 직전값 유지) */
 	volatile uint8_t  temp_valid;     /* 0 = CH0 써미스터 에러(디바운스됨) -> 히터 강제 OFF */
@@ -506,7 +547,6 @@ typedef struct
 	/* 교반(건조=FWD/STOP/REV, 313=0/1/2 재사용). RPM은 110분↑ 27로 전환(패턴 동일) */
 	uint8_t           stir_phase;
 	uint32_t          stir_since;
-	uint8_t           stir_reps;
 
 	/* 분쇄 */
 	uint8_t           grind_mode;     /* DjGrindMode                          */
@@ -518,8 +558,9 @@ typedef struct
 
 	/* 수증기 */
 	uint8_t           vapor_phase;    /* DjVaporPhase                         */
-	uint32_t          vapor_step_since;
-	uint16_t          vapor_step_cnt;
+	uint32_t          vapor_step_since; /* 직전 스텝 tick (페이싱용)          */
+	uint32_t          vapor_move_since; /* 현재 개/폐 동작 시작 tick (종료판정) */
+	uint16_t          vapor_step_cnt;   /* 동작 내 스텝 순번 (시작램프 인덱스) */
 
 	/* 팬 */
 	/* FAN_VAPOR는 vapor_phase로 관리(별도 상태 불필요). FAN_EXHAUST는 아래 fanx로 독립. */
@@ -533,7 +574,7 @@ typedef struct
 	uint32_t          disc_since;
 	/* THALL 리미트 인식까지 실제로 걸린 시간(ms). 배출 진입 시 0으로 리셋되며,
 	 * 0인 채로 다음 위상으로 넘어갔다면 = 리미트 미인식(135분 백스톱으로 전환).
-	 * 타임아웃 값(DJ_DOOR_TIMEOUT_MS) 재산정용 실측치 — 디버거에서 관찰. */
+	 * tdoor.h TDOOR_OPEN_MAX_MS/CLOSE_MAX_MS 재산정용 실측치 — 디버거에서 관찰. */
 	uint32_t          disc_open_ms;   /* 개방(CW) 리미트 도달까지 ms (0=미도달) */
 	uint32_t          disc_close_ms;  /* 닫힘(CCW) 리미트 도달까지 ms (0=미도달)*/
 	uint8_t           disc_pulse_off; /* 간헐 구동 현재 휴지구간?(1=코스트 중)  */
@@ -556,12 +597,16 @@ uint8_t      Dongjak_IsBusy(void);
  *   skip_door=0 : 정상 진입(배수문 닫힘+WHALL 대기부터). 리미트를 직접 조작할 때.
  *   skip_door=1 : 도어 닫힘 대기(WHALL)까지 생략, 교반/분쇄/수증기/팬을 정상
  *                 초기화한 '가열중' 상태로 즉시 진입.
- * 전제: g_app_mode=DONGJAK 유지(동작 마개 HS5 시작위치). scn_start=now로 리셋되어
+ * 전제: g_app_mode=DONGJAK 유지(동작 마개 HS2 시작위치). scn_start=now로 리셋되어
  * 시나리오 경과(105/110/120분 분기)가 0부터 카운트된다.
  * ★런타임에서는 함수 직접호출 대신 변수 트리거를 권장(링커 제거·GDB call 불필요):
  *     g_dongjak.dbg_enter_heat = 1(도어대기부터) 또는 2(도어생략)
  *   -> MotorTick가 1회 소비하여 이 함수를 호출한다. */
 void         Dongjak_DebugEnterHeat(uint8_t skip_door);
+/* 헹굼·건조를 건너뛰고 식힘 교반(80℃ 미만)부터. 앱 '동작 (식힘부터)' 버튼.
+ * 경과를 120분 지점으로 맞춰 넣으므로 10분 뒤 배출로 자연히 이어진다.
+ *   g_dongjak.dbg_enter_cool = 1  (MotorTick 이 1회 소비) */
+void         Dongjak_DebugEnterCool(void);
 
 #ifdef __cplusplus
 }

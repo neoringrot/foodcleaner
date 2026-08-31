@@ -552,7 +552,7 @@ static void stir_pattern(MotorPattern *p)
 	{
 		if (!g_moeum.stir_active)
 			return;
-		/* 모음: CW 3s / 정지 1s / CCW 3s = 1cycle 7s (moeum.h) */
+		/* 모음: CW 6s / 정지 1s / CCW 6s = 1cycle 13s (moeum.h) */
 		p->pattern = PROTO_PAT_TRI;
 		p->phase   = g_moeum.stir_phase;
 		p->rep     = (uint8_t)(g_moeum.stir_cycles & 0xFFU);
@@ -569,19 +569,21 @@ static void stir_pattern(MotorPattern *p)
 
 	switch (g_dongjak.state)
 	{
-	/* 헹굼 교반 = 식힘/배출과 같은 313 패턴 (CW3 / 정지1 / CCW3) */
+	/* 헹굼 교반 = 3구간 패턴이되 식힘/배출과 값이 다르다 (CW6 / 정지1 / CCW6,
+	 * 30RPM). 2026-08-26 변경 - dongjak.h DJ_RINSE_* 참조. */
 	case DJ_RINSE1_STIR: case DJ_RINSE1_DRAIN:
 	case DJ_RINSE2_STIR: case DJ_RINSE2_DRAIN:
 		p->pattern = PROTO_PAT_TRI;
-		p->on_ms   = (uint16_t)DJ_S313_CW_MS;
-		p->off_ms  = (uint16_t)DJ_S313_STOP_MS;
+		p->on_ms   = (uint16_t)DJ_RINSE_CW_MS;
+		p->off_ms  = (uint16_t)DJ_RINSE_STOP_MS;
 		break;
-	/* 건조 교반 = CW 3s + 정지 2s 를 5회 반복 후 CCW 3s (신스펙) */
+	/* 건조 교반 = 식힘/배출과 같은 3구간 패턴 (CW6 / 정지1 / CCW6).
+	 * ★2026-08-26: 구 패턴 A(CW3/정지2 ×5 -> CCW3)와 반복 카운터 stir_reps 폐지.
+	 * rep 은 반복 개념이 없어져 0 으로 남는다. */
 	case DJ_HEAT:
 		p->pattern = PROTO_PAT_TRI;
-		p->rep     = g_dongjak.stir_reps;
-		p->on_ms   = (uint16_t)DJ_STIR_FWD_MS;
-		p->off_ms  = (uint16_t)DJ_STIR_STOP_MS;
+		p->on_ms   = (uint16_t)DJ_S313_CW_MS;
+		p->off_ms  = (uint16_t)DJ_S313_STOP_MS;
 		break;
 	/* 식힘: 뜨거울 때는 CW 연속, 식으면 313 패턴 */
 	case DJ_COOLDOWN:
@@ -959,6 +961,16 @@ static uint8_t handle_control(const ProtoFrame *f)
 		}
 		return 1U;
 
+	case PROTO_ACT_DJ_COOL:
+		/* 헹굼·건조 생략, 식힘 교반(80℃ 미만)부터. DJ_HEAT 직행과 같은 래치
+		 * 규칙이라 여기서는 요청만 남긴다(중재자가 전환·제동 후에 세운다). */
+		if (!ModeArbiter_RequestDongjakCool())
+		{
+			g_proto.last_nak = (uint8_t)PROTO_NAK_BAD_VALUE;
+			return 0U;
+		}
+		return 1U;
+
 	case PROTO_ACT_DJ_HEAT:
 	case PROTO_ACT_DJ_HEAT_ND:
 		/* 헹굼을 건너뛰고 DJ_HEAT 부터. 여기서는 요청만 남긴다 - 이 함수는
@@ -975,7 +987,12 @@ static uint8_t handle_control(const ProtoFrame *f)
 
 	case PROTO_ACT_STOP:
 		/* 비상정지 + 대기(TESTBENCH) 모드로 복귀. 정지는 jungji 단일 모듈이
-		 * 담당하므로 여기서는 요청만 남긴다(등급은 강한 쪽이 이긴다). */
+		 * 담당하므로 여기서는 요청만 남긴다(등급은 강한 쪽이 이긴다).
+		 * ★APP_MODE_JUNGJI(5) 로 가지 않는 이유: 5 는 "마개가 HS3 정지 위치에
+		 *   놓여 있다"는 지속 상태를 나타낸다. 앱 정지는 순간 명령이고 마개
+		 *   위치를 바꾸지 않으므로 대기로 보내는 것이 맞다. 게다가 이 명령이
+		 *   앱에서 대기로 복귀하는 유일한 경로여서, 여기서 5 로 보내면 벤치로
+		 *   돌아갈 길이 없어진다. */
 		Jungji_Request(JUNGJI_SRC_APP, JUNGJI_KIND_EMERGENCY);
 		(void)ModeArbiter_RequestMode(APP_MODE_TESTBENCH, 0U, 1U);
 		return 1U;

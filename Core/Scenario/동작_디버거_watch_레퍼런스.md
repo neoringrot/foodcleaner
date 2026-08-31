@@ -36,20 +36,20 @@ Expressions 목록은 **워크스페이스 UI 상태**라 프로젝트 파일로
 
 | 값 | 상태 | 하는 일 | 다음 단계 전이 조건 |
 |---|---|---|---|
-| 0 | `DJ_IDLE` | 대기 | `start_req`(**중재자가 HS5 확정 시 호출** / `dbg_force_start`) → `scn_start` 후 RINSE1_CLOSE |
-| 1 | `DJ_RINSE1_CLOSE` | 1차 배수문 닫힘 구동 | `WDoor_AtClose()`(리미트) → RINSE1_FILL / `el ≥ DJ_DOOR_TIMEOUT_MS` → ERROR |
+| 0 | `DJ_IDLE` | 대기 | `start_req`(**중재자가 HS2 확정 시 호출** / `dbg_force_start`) → `scn_start` 후 RINSE1_CLOSE |
+| 1 | `DJ_RINSE1_CLOSE` | 1차 배수문 닫힘 구동(80 % 고정) | `WDoor_ReachedClose()` **또는** `el ≥ WDOOR_CLOSE_MS`(4.2초) → RINSE1_FILL. **ERROR 없음** |
 | 2 | `DJ_RINSE1_FILL` | 1차 급수밸브 ON, 수위 대기 | `water_reached` → RINSE1_FILL_EXTRA / `el ≥ DJ_FILL_TIMEOUT_MS` → ERROR |
 | 3 | `DJ_RINSE1_FILL_EXTRA` | 1차 수위 후 2초 추가급수 | `el ≥ DJ_FILL_EXTRA_MS`(2초) → 밸브OFF·RINSE1_STIR |
-| 4 | `DJ_RINSE1_STIR` | 1차 교반 CW3/정지2/CCW3 헹굼 | `el ≥ DJ_RINSE_STIR_MS`(**2분**) → RINSE1_OPEN |
-| 5 | `DJ_RINSE1_OPEN` | 1차 배수문 열림 구동 | `WDoor_AtOpen()`(리미트) → RINSE1_DRAIN / `el ≥ DJ_DOOR_TIMEOUT_MS` → ERROR |
+| 4 | `DJ_RINSE1_STIR` | 1차 교반 CW6/정지1/CCW6 헹굼(30RPM) | `el ≥ DJ_RINSE_STIR_MS`(**117초 = 13s×9**) → RINSE1_OPEN |
+| 5 | `DJ_RINSE1_OPEN` | 1차 배수문 열림 구동(80 %×2초→65 %) | `WDoor_ReachedOpen()` **또는** `el ≥ WDOOR_OPEN_MAX_MS`(6초) → RINSE1_DRAIN. **ERROR 없음** |
 | 6 | `DJ_RINSE1_DRAIN` | 1차 배수 교반(물빼기) | `el ≥ DJ_RINSE1_DRAIN_MS`(**30초**) → RINSE2_CLOSE |
 | 7 | `DJ_RINSE2_CLOSE` | 2차 배수문 닫힘 구동 | `WDoor_AtClose()` → RINSE2_FILL / 타임아웃 → ERROR |
 | 8 | `DJ_RINSE2_FILL` | 2차 급수밸브 ON, 수위 대기 | `water_reached` → RINSE2_FILL_EXTRA / 타임아웃 → ERROR |
 | 9 | `DJ_RINSE2_FILL_EXTRA` | 2차 수위 후 2초 추가급수 | `el ≥ DJ_FILL_EXTRA_MS`(2초) → 밸브OFF·RINSE2_STIR |
-| 10 | `DJ_RINSE2_STIR` | 2차 교반 CW3/정지2/CCW3 헹굼 | `el ≥ DJ_RINSE_STIR_MS`(**2분**) → RINSE2_OPEN |
+| 10 | `DJ_RINSE2_STIR` | 2차 교반 CW6/정지1/CCW6 헹굼(30RPM) | `el ≥ DJ_RINSE_STIR_MS`(**117초 = 13s×9**) → RINSE2_OPEN |
 | 11 | `DJ_RINSE2_OPEN` | 2차 배수문 열림 구동 | `WDoor_AtOpen()` → RINSE2_DRAIN / 타임아웃 → ERROR |
 | 12 | `DJ_RINSE2_DRAIN` | 2차 배수 교반(물빼기30초+잔수60초) | `el ≥ DJ_RINSE2_DRAIN_MS`(**90초**) → HEAT |
-| 13 | `DJ_HEAT` | 건조(히터+교반+분쇄+수증기+팬) | `sel ≥ DJ_T_COOLDOWN_MS`(120분) → COOLDOWN |
+| 13 | `DJ_HEAT` | 건조(히터+교반 30rpm CW6/정지1/CCW6+분쇄+수증기+팬. 110분↑ 교반만 40rpm) | `sel ≥ DJ_T_COOLDOWN_MS`(120분) → COOLDOWN |
 | 14 | `DJ_COOLDOWN` | 식힘(히터OFF). `cool_phase` 0=뜨거움(교반 지속CW+분쇄1000CCW) / 1=식음(80℃미만: 분쇄OFF+교반313) | `sel ≥ DJ_T_DISCHARGE_MS`(130분) → BIN_CHECK |
 | 15 | `DJ_BIN_CHECK` | 수거통 확인 | `cycle_count < 6` **&&** `bin_fill_pct < 90` → DISCHARGE (아니면 대기) |
 | 16 | `DJ_DISCHARGE` | 배출문 개방(CW, **타임아웃 없이 리미트까지**)+교반313 2분(TIMER-OUT↓)→교반정지·개방유지→**135분에 닫기(CCW, 타임아웃 없음)**→배수부 개방 | `disc_phase` 배출 FSM 완료 → `cycle_count++` → DONE |
@@ -118,20 +118,20 @@ Expressions 목록은 **워크스페이스 UI 상태**라 프로젝트 파일로
 |---|---|
 | `g_dongjak.heat_started` | HEAT: 0=배수문 닫힘 대기, 1=가열중 |
 | `g_dongjak.stir_phase` | 교반 위상(건조 0 FWD/1 STOP/2 REV · 313 0 CW/1 STOP/2 CCW) |
-| `g_dongjak.stir_reps` | 건조 교반 CW 반복 카운트(0..DJ_STIR_FWD_REPS=5, 도달 시 CCW) |
 | `g_dongjak.grind_mode` | `DjGrindMode` 0 OFF/1 COARSE/2 FINE/3 FINAL/4 COOL |
 | `g_dongjak.grind_phase` | 토글 0 RUN/1 STOP (COARSE·110분↑ FINAL 공용) |
 | `g_dongjak.grind_final_ph` | 110분 고속전환 0=감속대기(급반전 방지) / 1=역회전 확립→**4초구동/2초정지 토글** |
 | `g_dongjak.cool_phase` | 식힘 0=뜨거움(교반 지속CW+분쇄1000CCW) / 1=식음(분쇄OFF+교반313) |
 | `g_dongjak.grind_start` | 분쇄 허용온도(센서65℃) 최초 도달 tick(1차 3분 판정) |
 | `g_dongjak.vapor_phase` | `DjVaporPhase` 0 CLOSED/1 OPEN_DUCT(STEP1)/2 OPEN_AIR(STEP2)/3 OPEN/4 CLOSE_AIR/5 CLOSE_DUCT |
-| `g_dongjak.vapor_step_cnt` | 스테퍼 진행 스텝수(→DJ_DUCT_STEPS; 시작 램프 인덱스도 겸함) |
+| `g_dongjak.vapor_step_cnt` | 현재 개/폐 동작 내 스텝 순번 — **시작 램프 인덱스 전용**(종료 판정에는 안 쓰임) |
+| `g_dongjak.vapor_move_since` | 현재 개/폐 동작 시작 tick. **종료는 `now-vapor_move_since >= 구동시간`**(STEP1 15s / STEP2 열림1s·닫힘2s) |
 | `g_dongjak.fanb_on` | BLDC 식힘팬(BLDC_FAN) 현재 ON?(분쇄 동작 중 30/10). FAN_VAPOR(방수팬)은 `vapor_phase`로 확인(0=OFF, 1~5=ON) |
 | `g_dongjak.fanx_on` | **FAN_EXHAUST(배기팬) 현재 ON?** — 시나리오 전체 15분ON/2분OFF 독립 duty(THERM3 무관). `fanx_since`=현 구간 시작 tick |
 | `g_dongjak.disc_phase` | `DjDischPhase` 0 OPEN_T(개방CW)/1 EXPEL(교반2분)/**2 HOLD(교반정지·개방유지, 135분 대기)**/3 CLOSE_T(닫힘CCW)/4 OPEN_W ← ★2026-08-17 HOLD 추가로 CLOSE_T·OPEN_W 값이 2/3→3/4로 밀림 |
 | `g_dongjak.disc_open_ms` | 배출문 **개방** THALL_OPEN 인식까지 실측 ms (**0 = 미인식**, 135분 백스톱으로 닫기 전환). 타임아웃 값 재산정용 |
 | `g_dongjak.disc_close_ms` | 배출문 **닫힘** THALL_CLOSE 인식까지 실측 ms (**0 = 아직 미인식** — NO_TIMEOUT이라 계속 CCW 구동 중) |
-| `g_dongjak.disc_pulse_off` | 배출문 간헐 구동 휴지구간?(1=코스트+VM OFF). 15초(`DJ_DISCH_DOOR_PULSE_AFTER_MS`) 넘겨 리미트 미인식일 때만 10초 구동/5초 휴지로 토글 — 정상 개폐 시간대엔 항상 0 |
+| `g_dongjak.disc_pulse_off` | ~~배출문 간헐 구동 휴지구간~~ — **2026-08-25부터 항상 0**. 펄스 개시(15초)가 배출문 상한(14.3초)보다 늦어 도달하지 않는다 |
 
 ### 4.3 4.5 비상정지 / 시작·정지 제어
 | 식 | 의미 |
@@ -140,7 +140,7 @@ Expressions 목록은 **워크스페이스 UI 상태**라 프로젝트 파일로
 | `g_dongjak.dbg_force_start` | **[쓰기]** 1 = HS 없이 강제 시작(1회성). **중재자 도입 후에도 그대로 유효** |
 | `g_dongjak.dbg_force_stop` | **[쓰기]** 1 = 정지버튼 모사 → `DJ_ABORTED`(시나리오 자체 안전 식힘 경로) |
 | `g_dongjak.abort_req` | 정지 요청 래치 |
-| `g_dongjak.err_code` | `DjErrCode` DJ_ERROR 원인: 1 RINSE_CLOSE / 2 RINSE_FILL / 3 RINSE_OPEN / 4 HEAT_DOOR / 5 DISCH_OPEN / 6 DISCH_CLOSE / 7 DISCH_WOPEN |
+| `g_dongjak.err_code` | `DjErrCode` DJ_ERROR 원인: ~~1 RINSE_CLOSE~~ / 2 RINSE_FILL / ~~3 RINSE_OPEN~~ / ~~4 HEAT_DOOR~~ / ~~5 DISCH_OPEN~~ / ~~6 DISCH_CLOSE~~ / ~~7 DISCH_WOPEN~~. **2026-08-25: 도어 관련 코드(1·3·4·5·6·7)는 발생하지 않는다** — 시간 상한이 정상 종료라 급수(2)만 남는다 |
 | `g_dongjak.err_clear_req` | **[쓰기]** 1 = DJ_ERROR→IDLE 복구(1회성, `Dongjak_ClearError()`와 동일) |
 | ~~`g_dongjak.lid_guard`~~ | **미사용**(`DJ_HS_TRIGGER_INTERNAL=0`). 마개 이탈 감시는 중재자의 `HS_LOST`가 담당 |
 | ~~`g_dongjak.lid_low_cnt`~~ | **미사용**(상동). 디바운스는 `g_modearb.cand_cnt` |
@@ -170,7 +170,8 @@ Expressions 목록은 **워크스페이스 UI 상태**라 프로젝트 파일로
 |---|---|
 | `g_modearb.dbg_disable = 1` | **중재자 정지** → `g_app_mode`를 디버거로 수동 고정 가능(구 방식 복원). **아래 강제시작 전에 먼저 할 것** |
 | `g_app_mode = 2` | 수동으로 동작 모드 진입(`dbg_disable=1` 상태에서만 유지됨) |
-| `g_dongjak.dbg_force_start = 1` | HS5 없이 시작(벤치, IDLE→RINSE1_CLOSE). 1회성 |
+| `g_dongjak.dbg_force_start = 1` | HS2 없이 시작(벤치, IDLE→RINSE1_CLOSE). 1회성 |
+| `g_dongjak.dbg_enter_cool = 1` | **헹굼·건조 생략, 식힘 교반(80℃ 미만)부터.** 경과를 120분 지점으로 맞춰 넣어 10분 뒤 배출로 이어진다. 앱 `동작 (식힘부터)` 버튼 / `PROTO_ACT_DJ_COOL`(0x09) / `send_action.py dj-cool`. 1회성 |
 | `g_dongjak.dbg_enter_heat = 1` | **헹굼 건너뛰고 DJ_HEAT부터 시작**(1=도어 닫힘·WHALL 대기부터, 리미트 직접 조작 시). MotorTick가 1회 소비. `scn_start`=now 리셋 → 경과 0부터. **먼저 동작 모드 진입**(위 dbg_disable+app_mode) 필요 |
 | `g_dongjak.dbg_enter_heat = 2` | 위와 동일하되 **도어 대기까지 생략**(교반/분쇄/수증기/팬 정상 개시, 바로 가열중) |
 | `g_dongjak.dbg_beep = N` | **[TEST] 즉시 N회 비프**(스피커/오디오 경로 확인용). ※`DJ_TEST_FAST_TIMING=1`일 때만 컴파일됨 — 현재 0이라 무효 |
@@ -179,9 +180,8 @@ Expressions 목록은 **워크스페이스 UI 상태**라 프로젝트 파일로
 | `g_dongjak.dbg_force_stop = 1` | 처리 중 즉시 비상정지(`DJ_ABORTED`). **DJ_ERROR에서는 IDLE 복구**(정지=리셋 겸용) |
 | `g_jungji.dbg_stop_req = 1` | **전역 비상정지**(중재자·모드 무관, BLDC 단락제동 포함). 1회성 |
 | `g_modearb.dbg_pos_force = 5` | 홀 없이 마개 위치 주입(1 강음/2 모음/3 정지/4 배수/5 동작). 0 = 미사용 |
-| 매크로 `DJ_DOOR_LIMIT_OPTIONAL=1` | (헹굼 도어) 리밋 미도달 시 4s 후 진행(육안모드) |
-| 매크로 `DJ_TDOOR_LIMIT_OPTIONAL=0` | **배출문 전용** — 기본 0(THALL 리미트 게이팅). 미도달 시 타임아웃→DJ_ERROR(코드5/6). THALL 미배선 벤치에서만 1(4s 후 진행) |
-| 매크로 `DJ_HS_TRIGGER_INTERNAL=1` | 구 동작 복원 — dongjak이 직접 HS5 에지/lid 감시(중재자와 **이중 처리되니** 중재자를 끄고 쓸 것) |
+| ~~매크로 `DJ_DOOR_LIMIT_OPTIONAL`/`DJ_TDOOR_LIMIT_OPTIONAL`~~ | **2026-08-25 폐지** — 육안모드 분기가 코드에서 제거됨. 도어 시간은 `wdoor.h`의 `WDOOR_CLOSE_MS`/`WDOOR_OPEN_MAX_MS`, `tdoor.h`의 `TDOOR_*_MAX_MS`로 조정 |
+| 매크로 `DJ_HS_TRIGGER_INTERNAL=1` | 구 동작 복원 — dongjak이 직접 HS2 에지/lid 감시(중재자와 **이중 처리되니** 중재자를 끄고 쓸 것) |
 | 매크로 `DJ_LID_OPEN_ABORT=0` | 4.5 투입구 개방 감시 비활성(`DJ_HS_TRIGGER_INTERNAL=1`일 때만 의미 있음) |
 | 매크로 `DJ_BIN_CHECK_ENABLE=0` | 수거통 확인 생략(즉시 배출) |
 | 매크로 `JUNGJI_BLDC_BRAKE_USE=0` | BLDC 비상정지를 단락제동 없이 코스트로(제동 거동을 빼고 관찰할 때) |
@@ -251,11 +251,12 @@ uwTick
 ### 8.1 모드 — `g_app_mode`
 | 값 | 모드 | 트리거(마개 위치) |
 |---|---|---|
-| 0 | `APP_MODE_TESTBENCH` | 대기/벤치. HS3(정지) 확정 시 여기로 복귀 |
-| 1 | `APP_MODE_MOEUM` | HS2 모음 |
-| 2 | `APP_MODE_DONGJAK` | HS5 동작 |
+| 0 | `APP_MODE_TESTBENCH` | 대기/벤치(부팅 기본). 앱 정지 명령(`ACT_STOP`)도 여기로 |
+| 1 | `APP_MODE_MOEUM` | HS5 모음 |
+| 2 | `APP_MODE_DONGJAK` | HS2 동작 |
 | 3 | `APP_MODE_KANGEUM` | HS1 강음 (스텁 — 구동 없음) |
 | 4 | `APP_MODE_BAESU` | HS4 배수 (스텁 — 구동 없음) |
+| 5 | `APP_MODE_JUNGJI` | **HS3 정지** (★2026-08-25 신설). 마개가 정지 위치에 있는 동안 유지. 시나리오 tick 없음 + 벤치 폴링 유지 = 대기와 실행 성격 동일, **표시만 구분**. 나가는 길: 마개를 다른 위치로 / 앱 `ACT_STOP`(→0) |
 
 ### 8.2 마개 위치 — `g_modearb.*`
 | 식 | 의미 |
@@ -300,14 +301,15 @@ uwTick
 
 | 분류 | 매크로 = 값 |
 |---|---|
-| RPM | `DJ_STIR_RPM=20`(110분 전) · **`DJ_STIR_RPM_HISPEED=27`(110분↑)** · `DJ_STIR_RPM_HILOAD=30`(대기) · `DJ_RINSE_STIR_RPM=25` · `DJ_GRIND_COARSE_RPM=1500` · `DJ_GRIND_FINE_RPM=1000` · `DJ_GRIND_FINAL_RPM=2000` |
-| 건조 교반 | `DJ_STIR_FWD_MS=3000` · `DJ_STIR_STOP_MS=2000` · `DJ_STIR_REV_MS=3000` · **`DJ_STIR_FWD_REPS=5`**(CW3/정지2 ×5→CCW3) |
+| RPM | `DJ_STIR_RPM=30`(패턴 교반 공통: 건조·식힘80℃미만·배출) · **`DJ_STIR_RPM_HISPEED=40`(110분↑)** · `DJ_COOL_HOT_STIR_RPM=20`(식힘 80℃↑ 지속CW 전용) · `DJ_RINSE_STIR_RPM=30` · `DJ_STIR_RPM_HILOAD=30`(대기, 이제 증속 아님) · `DJ_GRIND_COARSE_RPM=1500` · `DJ_GRIND_FINE_RPM=1000` · `DJ_GRIND_FINAL_RPM=2000` |
+| 헹굼 교반 | `DJ_RINSE_STIR_RPM=30` · `DJ_RINSE_CW_MS=6000` · `DJ_RINSE_STOP_MS=1000` · `DJ_RINSE_CCW_MS=6000` (1사이클 13s) · `DJ_RINSE_STIR_MS=117000`(9사이클, 2분 이하 정수 사이클) ★2026-08-26 |
+| 건조·식힘·배출 교반 | `DJ_S313_CW_MS=6000` · `DJ_S313_STOP_MS=1000` · `DJ_S313_CCW_MS=6000` (1사이클 13s) ★2026-08-26. **건조 전용 패턴 A(`DJ_STIR_FWD/STOP/REV_MS`, `DJ_STIR_FWD_REPS`, `dj_stir_dry_*`, `stir_reps`)는 폐지**됐다 |
 | 313 교반 | `DJ_S313_CW_MS=3000` · `DJ_S313_STOP_MS=1000` · `DJ_S313_CCW_MS=3000` |
 | 분쇄 | 1차 토글 `DJ_GRIND_RUN_MS=3000`/`STOP_MS=2000` · 110분↑ 고속 **`DJ_GRIND_RUN_FINAL_MS=4000`/`STOP_FINAL_MS=2000`(4초구동/2초정지 토글)**, 최초 진입만 `DJ_GRIND_FINAL_DECEL_MS=1500`(급반전 방지 감속)+슬루 상승 후 토글 |
 | 팬 | **FAN_VAPOR**(방수팬)=THERM3 100/84℃ vapor시퀀스(duty 없음) · **FAN_EXHAUST**(배기팬)=시나리오 전체 **`DJ_FANX_ON_MS=15분`/`OFF=2분` 독립 duty**(THERM3 분리, 2026-08-17; TEST=15초/2초) · **BLDC식힘팬** `DJ_FANB_ON_MS=30000`/`OFF=10000`(분쇄 동작 중) |
 | 헹굼/배출 | `DJ_RINSE_STIR_MS=120000`(2분) · `DJ_RINSE1_DRAIN_MS=30000`(30초) · `DJ_RINSE2_DRAIN_MS=90000`(90초,잔수포함) · `DJ_FILL_EXTRA_MS=2000` · 배출 교반 종료=**TIMER-OUT(PF8)↓** (백업 `DJ_DISCHARGE_STIR_MS=120000`) / **배출문 닫기 개시=`DJ_T_LATCH_MS=135분`** |
-| 스테퍼 | `DJ_DUCT_STEPS=512`(개폐 스텝수) · STEP1 `DJ_STEP_INTERVAL_MS=3`(333PPS)/`START=10`(100PPS) · **STEP2 전용 느린 페이싱 `DJ_STEP2_INTERVAL_MS=6`(167PPS)/`DJ_STEP2_START_MS=20`(50PPS)** (동시 BLDC 부하+실부하 탈조방지) · 램프 `DJ_STEP_RAMP_STEPS=40`(선형가속) · **`DJ_STEP_RELEASE_DUCT_ON_OPEN=1`**(STEP1 개방후 코일해제→STEP2에 레일전류 양보) · 개폐 후 정지 |
+| 스테퍼 | **구동시간 기준(2026-08-25 벤치확정, 스텝수 기준 폐지)**: `DJ_STEP1_RUN_MS=15000`(관로 개/폐 각 15s, 방향무관) · `DJ_STEP2_OPEN_MS=1000`(흡입 열림) · `DJ_STEP2_CLOSE_MS=2000`(흡입 닫힘) · STEP1 `DJ_STEP_INTERVAL_MS=3`(333PPS)/`START=10`(100PPS) · STEP2 `DJ_STEP2_INTERVAL_MS=3`(333PPS, **2026-08-25 6→3 복귀**)/**`DJ_STEP2_START_MS=20`(50PPS 시작램프 유지 — 1s 창의 488ms를 먹으므로 이동량 부족 시 1순위 조정 대상)** · 램프 `DJ_STEP_RAMP_STEPS=40`(선형가속) · **`DJ_STEP_RELEASE_DUCT_ON_OPEN=1`**(STEP1 개방후 코일해제→STEP2에 레일전류 양보) · 개폐 후 정지 |
 | 식힘 80℃ | 분쇄 OFF·교반313 전환 조건 = **(THERM1 && THERM2 둘 다 유효 && <`DJ_TEMP_COOL_GRIND_OFF_D10`=800) ‖ 바이메탈80 하강엣지**. `DJ_COOL_USE_THERM2=1`(THERM2 AND 추가, CH1=PC1), `DJ_COOL_USE_BIMETAL80=1`(`GPIO_EXTI_BIMETAL_80` PF0). 보수적: 써미스터 에러 시 '안 식음'. COOLDOWN 진입 시 stale 엣지 클리어 |
 | 수거통 | `DJ_MAX_CYCLES=6` · `DJ_BIN_FULL_PCT=90` · `DJ_BIN_CHECK_ENABLE=1` |
-| 채널/정책 | `DJ_HS_START_IDX=4`(HS5) · `DJ_TEMP_CH=0`(THERM1) · **`DJ_VAPOR_TEMP_CH=2`(THERM3/J23,PC2)** · `DJ_WATER_ACTIVE_LOW=1` · `DJ_FILL_USE_WATER_ON=1` · `DJ_DRAIN_VALVE_USE=1` |
-| 안전 | `DJ_DOOR_TIMEOUT_MS=15000` · `DJ_FILL_TIMEOUT_MS=120000` · `DJ_DOOR_BENCH_MS=4000` · `DJ_LID_CONFIRM_SAMPLES=3` · 도어듀티 `DJ_DOOR_DUTY_PCT=50`(dongjak.c) |
+| 채널/정책 | `DJ_HS_START_IDX=1`(HS2) · `DJ_TEMP_CH=0`(THERM1) · **`DJ_VAPOR_TEMP_CH=2`(THERM3/J23,PC2)** · `DJ_WATER_ACTIVE_LOW=1` · `DJ_FILL_USE_WATER_ON=1` · `DJ_DRAIN_VALVE_USE=1` |
+| 안전 | `DJ_FILL_TIMEOUT_MS=120000` · `DJ_LID_CONFIRM_SAMPLES=3`. **도어(2026-08-25 이관)**: `WDOOR_CLOSE_DUTY=80`/`WDOOR_CLOSE_MS=4200` · `WDOOR_OPEN_KICK_DUTY=80`/`WDOOR_OPEN_KICK_MS=2000`/`WDOOR_OPEN_RUN_DUTY=65`/`WDOOR_OPEN_MAX_MS=6000`(wdoor.h) · `TDOOR_DUTY=80`/`TDOOR_OVERRUN_MS=1000`/`TDOOR_OPEN_MAX_MS`=`TDOOR_CLOSE_MAX_MS`=`14300`(tdoor.h). ~~`DJ_DOOR_TIMEOUT_MS`·`DJ_DOOR_BENCH_MS`·`DJ_DOOR_DUTY_PCT`~~ 폐지 |

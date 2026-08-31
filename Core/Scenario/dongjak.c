@@ -36,8 +36,6 @@
 extern volatile int16_t g_therm_c_d10[];
 extern volatile uint8_t g_bin_fill_pct;
 
-#define DJ_DOOR_DUTY_PCT    50U    /* 도어 PWM 힘(모음과 동일)               */
-
 DongjakCtx g_dongjak;
 
 /* ---- 수증기 스테퍼 핸들 (냄새관로=STEP1, 흡입제어=STEP2 / 역할 TBD) ---- */
@@ -117,41 +115,60 @@ static void dj_drain_valve(uint8_t open)
  * (모터는 리미트 도달 후 호출부가 Stop/Disable; 밸브는 다음 Close까지 유지된다.) */
 static void dj_wdoor_open(void)
 {
-	WDoor_Enable(); WDoor_Open((uint8_t)DJ_DOOR_DUTY_PCT);
+	WDoor_LimitArm();                    /* 이전 이동의 stale 리미트 엣지 제거 */
+	WDoor_Enable(); WDoor_Open(WDoor_OpenDutyAt(0U));  /* 킥 80% -> tick 갱신 */
 	dj_drain_valve(1U);
 }
 
 static void dj_wdoor_close(void)
 {
-	WDoor_Enable(); WDoor_Close((uint8_t)DJ_DOOR_DUTY_PCT);
+	WDoor_LimitArm();
+	WDoor_Enable(); WDoor_Close((uint8_t)WDOOR_CLOSE_DUTY);  /* 닫힘 80% 고정 */
 	dj_drain_valve(0U);
 }
 
-/* 도어 리미트 게이트 판정. 정상 모드=리미트 도달만. DJ_DOOR_LIMIT_OPTIONAL=1
- * (벤치 육안)=리미트 미도달이라도 DJ_DOOR_BENCH_MS 경과 시 통과(센서 무시).
- * 모음(MOEUM_DOOR_LIMIT_OPTIONAL)과 동일 기조. el = 해당 도어 구동 경과(ms). */
-static uint8_t dj_door_done(uint8_t at_limit, uint32_t el)
+/* 배수문 이동 완료 판정 — 테스트벤치 tb_drv8871(tb_wdoor_*)과 **동일 규칙**이며
+ * 값은 wdoor.h의 WDOOR_* 프로파일 한 곳에서 온다(2026-08-25 벤치 확정).
+ *   opening=1 (열림) : WHALL-OPEN 인식이 정상 종료. 미인식 대비 상한이
+ *                      WDOOR_OPEN_MAX_MS(6s). duty는 호출부가 매 tick
+ *                      WDoor_OpenDutyAt(el)로 킥(80%,2s)->유지(65%) 갱신.
+ *   opening=0 (닫힘) : WDOOR_CLOSE_MS(4.2s) 경과가 정상 종료 조건. 그 전에
+ *                      WHALL-CLOSE가 인식되면 거기서 종료.
+ * 상한/시간 종료도 "정상 종료"다 — 벤치와 같이 모터만 세우고 다음 단계로 간다
+ * (구 고정 타임아웃 ERROR 낙하 없음). el = 해당 이동 구동 경과(ms).
+ * at_limit은 호출부에서 WDoor_Reached*() (arm 이후 EXTI 하강엣지 OR 레벨)로 넘긴다. */
+static uint8_t dj_wdoor_done(uint8_t at_limit, uint8_t opening, uint32_t el)
 {
-#if DJ_DOOR_LIMIT_OPTIONAL
-	return (uint8_t)(at_limit || (el >= (uint32_t)DJ_DOOR_BENCH_MS));
-#else
-	(void)el;
-	return at_limit;
-#endif
+	uint32_t lim = opening ? (uint32_t)WDOOR_OPEN_MAX_MS : (uint32_t)WDOOR_CLOSE_MS;
+	return (uint8_t)(at_limit || (el >= lim));
 }
 
-/* 배출문(TDoor) 전용 리미트 게이트. THALL(PF2/PF5)이 벤치 미검증이라, OPTIONAL=1이면
- * 리미트 미도달이라도 el(구동 경과) >= DJ_DOOR_BENCH_MS 경과 시 통과시킨다. 근거:
- * 배출문 개방 자체로 HW 2분타이머가 시작되므로, 리미트 인식 실패가 교반/타이머
- * 시작을 막지 않도록 함(리미트 검증되면 DJ_TDOOR_LIMIT_OPTIONAL=0). */
-static uint8_t dj_tdoor_done(uint8_t at_limit, uint32_t el)
+/* 배출문(TDoor) 이동 완료 판정 — tb_drv8871(tb_tdoor_*)과 동일 규칙, 값은
+ * tdoor.h의 TDOOR_* 프로파일에서 온다. 배수문과 달리 **THALL 인식으로 즉시
+ * 서지 않는다**: 인식 시점에 추가회전 창을 걸어두고 TDOOR_OVERRUN_MS(1s)를 더
+ * 돌아 자석을 지난 뒤 종료한다. 추가회전 창은 래치라 문이 자석을 지나 레벨이
+ * 풀려도 1초를 채운다. 방향별 상한(TDOOR_OPEN_MAX_MS/TDOOR_CLOSE_MAX_MS,
+ * 14.3s)은 구동 전체의 하드 상한이라 추가회전보다 우선한다.
+ * el = 해당 위상(개방/닫힘) 구동 경과(ms). 이동 개시마다 dj_tdoor_arm(). */
+static uint32_t dj_tdoor_over_at;      /* 0 = 아직 THALL 미인식 */
+
+static void dj_tdoor_arm(void)
 {
-#if DJ_TDOOR_LIMIT_OPTIONAL
-	return (uint8_t)(at_limit || (el >= (uint32_t)DJ_DOOR_BENCH_MS));
-#else
-	(void)el;
-	return at_limit;
-#endif
+	dj_tdoor_over_at = 0U;
+}
+
+static uint8_t dj_tdoor_done(uint8_t at_limit, uint8_t opening, uint32_t el)
+{
+	uint32_t cap = opening ? (uint32_t)TDOOR_OPEN_MAX_MS
+	                       : (uint32_t)TDOOR_CLOSE_MAX_MS;
+
+	if (el >= cap) { return 1U; }                  /* 하드 상한(추가회전 잘림) */
+
+	if (at_limit && (dj_tdoor_over_at == 0U))
+	{
+		dj_tdoor_over_at = el + (uint32_t)TDOOR_OVERRUN_MS;   /* 추가회전 래치 */
+	}
+	return (uint8_t)((dj_tdoor_over_at != 0U) && (el >= dj_tdoor_over_at));
 }
 
 static void dj_all_off(void)
@@ -204,61 +221,18 @@ static uint8_t dj_water_present(void)
 #endif
 }
 
-/* ---- 교반 패턴 A: 건조 (CW 3s/정지 2s ×5 → CCW 3s 반복, 신스펙 REPS=5) ---
- * RPM은 호출부가 지정(110분 전 20, 이후 27). 패턴은 동일. */
-static void dj_stir_dry_begin(DongjakCtx *c, uint32_t now)
-{
-	c->stir_phase = (uint8_t)DJ_STIR_FWD;
-	c->stir_reps  = 0U;
-	c->stir_since = now;
-	dj_stir_spin(0U, (uint16_t)DJ_STIR_RPM);   /* CW (시작=20RPM, sel=0)      */
-}
-
-static void dj_stir_dry_tick(DongjakCtx *c, uint32_t now, uint16_t rpm)
-{
-	uint32_t el = now - c->stir_since;
-	switch ((DjStirPhase)c->stir_phase)
-	{
-	case DJ_STIR_FWD:
-		if (el >= (uint32_t)DJ_STIR_FWD_MS)
-		{
-			BldcCtrl_Stop(&g_stir_ctrl);
-			c->stir_reps++;
-			c->stir_phase = (uint8_t)DJ_STIR_STOPPED;
-			c->stir_since = now;
-		}
-		break;
-	case DJ_STIR_STOPPED:
-		if (el >= (uint32_t)DJ_STIR_STOP_MS)
-		{
-			if (c->stir_reps < (uint8_t)DJ_STIR_FWD_REPS)
-			{
-				dj_stir_spin(0U, rpm);                         /* CW           */
-				c->stir_phase = (uint8_t)DJ_STIR_FWD;
-			}
-			else
-			{
-				dj_stir_spin(1U, rpm);                         /* CCW          */
-				c->stir_phase = (uint8_t)DJ_STIR_REV;
-			}
-			c->stir_since = now;
-		}
-		break;
-	case DJ_STIR_REV:
-	default:
-		if (el >= (uint32_t)DJ_STIR_REV_MS)
-		{
-			c->stir_reps = 0U;
-			dj_stir_spin(0U, rpm);                             /* CW 재시작    */
-			c->stir_phase = (uint8_t)DJ_STIR_FWD;
-			c->stir_since = now;
-		}
-		break;
-	}
-}
-
-/* ---- 교반 패턴 B: CW 3s/정지 1s/CCW 3s (헹굼·식힘·배출, docx 6·10.2) ---
- * stir_phase 0=CW, 1=정지, 2=CCW 재사용. rpm은 호출부가 지정. */
+/* ---- (삭제됨) 교반 패턴 A: 건조 CW3/정지2 ×5 -> CCW3 ---------------------
+ * ★2026-08-26: 건조 교반이 식힘/배출과 같은 3구간 패턴(30RPM CW6/정지1/CCW6)으로
+ * 통일되면서 dj_stir_dry_begin/_tick 과 반복 카운터 stir_reps 를 제거했다.
+ * 건조도 이제 dj_stir313_begin/_tick 을 쓴다(RPM만 110분↑ 40으로 전환).
+ * 패턴 A 를 되살려야 하면 이 커밋 이전 버전을 참조할 것.                    */
+/* ---- 교반 패턴 B: CW/정지/CCW 3구간 (헹굼·건조·식힘·배출 전부) ----------
+ * stir_phase 0=CW, 1=정지, 2=CCW. rpm과 구간 길이는 호출부가 지정한다.
+ * ★2026-08-26 부로 동작 시나리오의 교반은 전부 이 3구간 패턴 하나다
+ *   (건조 패턴 A = CW3/정지2 ×5 -> CCW3 폐지). 두 래퍼로 갈린다:
+ *     dj_stir_rinse_tick() - 헹굼      (DJ_RINSE_*, 30RPM)
+ *     dj_stir313_tick()    - 건조/식힘/배출(DJ_S313_*, RPM은 호출부)
+ *   현재 두 구간값은 6s/1s/6s 로 같지만, 헹굼만 따로 바꿀 수 있게 분리해 둔다. */
 static void dj_stir313_begin(DongjakCtx *c, uint32_t now, uint16_t rpm)
 {
 	c->stir_phase = 0U;
@@ -266,20 +240,21 @@ static void dj_stir313_begin(DongjakCtx *c, uint32_t now, uint16_t rpm)
 	dj_stir_spin(0U, rpm);                     /* CW                          */
 }
 
-static void dj_stir313_tick(DongjakCtx *c, uint32_t now, uint16_t rpm)
+static void dj_stir3_tick(DongjakCtx *c, uint32_t now, uint16_t rpm,
+                          uint32_t cw_ms, uint32_t stop_ms, uint32_t ccw_ms)
 {
 	uint32_t el = now - c->stir_since;
 	switch (c->stir_phase)
 	{
 	case 0:  /* CW */
-		if (el >= (uint32_t)DJ_S313_CW_MS)
+		if (el >= cw_ms)
 		{
 			BldcCtrl_Stop(&g_stir_ctrl);
 			c->stir_phase = 1U; c->stir_since = now;
 		}
 		break;
 	case 1:  /* 정지 */
-		if (el >= (uint32_t)DJ_S313_STOP_MS)
+		if (el >= stop_ms)
 		{
 			dj_stir_spin(1U, rpm);             /* CCW                         */
 			c->stir_phase = 2U; c->stir_since = now;
@@ -287,13 +262,27 @@ static void dj_stir313_tick(DongjakCtx *c, uint32_t now, uint16_t rpm)
 		break;
 	case 2:  /* CCW */
 	default:
-		if (el >= (uint32_t)DJ_S313_CCW_MS)
+		if (el >= ccw_ms)
 		{
 			dj_stir_spin(0U, rpm);             /* CW 재시작                   */
 			c->stir_phase = 0U; c->stir_since = now;
 		}
 		break;
 	}
+}
+
+/* 식힘/배출: CW 3s / 정지 1s / CCW 3s */
+static void dj_stir313_tick(DongjakCtx *c, uint32_t now, uint16_t rpm)
+{
+	dj_stir3_tick(c, now, rpm, (uint32_t)DJ_S313_CW_MS,
+	              (uint32_t)DJ_S313_STOP_MS, (uint32_t)DJ_S313_CCW_MS);
+}
+
+/* 헹굼(1·2차 교반 헹굼 + 배수 교반): CW 6s / 정지 1s / CCW 6s, 30RPM */
+static void dj_stir_rinse_tick(DongjakCtx *c, uint32_t now)
+{
+	dj_stir3_tick(c, now, (uint16_t)DJ_RINSE_STIR_RPM, (uint32_t)DJ_RINSE_CW_MS,
+	              (uint32_t)DJ_RINSE_STOP_MS, (uint32_t)DJ_RINSE_CCW_MS);
 }
 
 /* ---- 히터: 114↓ON / 117↑OFF 히스테리시스 (+210 SW 보조, 신스펙 항목5) ----
@@ -442,6 +431,29 @@ static uint32_t dj_step_interval(uint16_t idx, uint8_t air)
 	return run;
 }
 
+/* 개/폐 1회 구동시간(ms). 테스트벤치(tb_stepmotor)와 동일 규칙:
+ *   STEP1(관로) 방향 무관 15s / STEP2(흡입) 열림 1s · 닫힘 2s.
+ * 기구 스토퍼에 밀어붙이는 방식이라 "시간"이 스펙이고, 실제 스텝수는 페이싱
+ * (dj_step_interval)에 딸린 결과값이다. */
+static uint32_t dj_move_ms(uint8_t phase)
+{
+	switch ((DjVaporPhase)phase)
+	{
+	case DJ_VP_OPEN_AIR:  return (uint32_t)DJ_STEP2_OPEN_MS;   /* 흡입 열림 1s  */
+	case DJ_VP_CLOSE_AIR: return (uint32_t)DJ_STEP2_CLOSE_MS;  /* 흡입 닫힘 2s  */
+	default:              return (uint32_t)DJ_STEP1_RUN_MS;    /* 관로 개/폐 15s */
+	}
+}
+
+/* 개/폐 동작 시작: 램프 인덱스·페이싱·구동시간 기준점을 한 번에 리셋. */
+static void dj_vapor_move_begin(DongjakCtx *c, uint8_t phase, uint32_t now)
+{
+	c->vapor_step_cnt   = 0U;
+	c->vapor_step_since = now;
+	c->vapor_move_since = now;
+	c->vapor_phase      = phase;
+}
+
 static void dj_vapor_tick(DongjakCtx *c, uint32_t now)
 {
 	int16_t  t  = c->vapor_temp_d10;
@@ -449,6 +461,8 @@ static void dj_vapor_tick(DongjakCtx *c, uint32_t now)
 	uint8_t  air = (uint8_t)((c->vapor_phase == (uint8_t)DJ_VP_OPEN_AIR) ||
 	                         (c->vapor_phase == (uint8_t)DJ_VP_CLOSE_AIR));
 	uint8_t  due = (uint8_t)((now - c->vapor_step_since) >= dj_step_interval(c->vapor_step_cnt, air));
+	/* 종료는 스텝수가 아니라 경과시간으로 판정(벤치와 동일). */
+	uint8_t  done = (uint8_t)((now - c->vapor_move_since) >= dj_move_ms(c->vapor_phase));
 
 	switch ((DjVaporPhase)c->vapor_phase)
 	{
@@ -457,57 +471,54 @@ static void dj_vapor_tick(DongjakCtx *c, uint32_t now)
 		{
 			gpio_ctrl_on(GPIO_OUT_FAN_VAPOR);        /* 1) 방수팬 ON (팬 먼저)  */
 			/* FAN_EXHAUST는 THERM3 루프에서 분리됨(dj_fan_exhaust_tick가 15/2 duty로 독립 제어) */
-			c->vapor_step_cnt = 0U; c->vapor_step_since = now;
-			c->vapor_phase = (uint8_t)DJ_VP_OPEN_DUCT;
+			dj_vapor_move_begin(c, (uint8_t)DJ_VP_OPEN_DUCT, now);
 		}
 		break;
-	case DJ_VP_OPEN_DUCT:                             /* 2) 냄새 관로 OPEN       */
-		if (due)
+	case DJ_VP_OPEN_DUCT:                             /* 2) 냄새 관로 OPEN (15s) */
+		if (done)
+		{
+#if DJ_STEP_RELEASE_DUCT_ON_OPEN
+			StepMotor_Release(&dj_duct);      /* STEP1 코일 해제 → STEP2에 레일 전류 양보 */
+#endif
+			dj_vapor_move_begin(c, (uint8_t)DJ_VP_OPEN_AIR, now);
+		}
+		else if (due)
 		{
 			StepMotor_Step(&dj_duct, 1); c->vapor_step_cnt++; c->vapor_step_since = now;
-			if (c->vapor_step_cnt >= (uint16_t)DJ_DUCT_STEPS)
-			{
-#if DJ_STEP_RELEASE_DUCT_ON_OPEN
-				StepMotor_Release(&dj_duct);  /* STEP1 코일 해제 → STEP2에 레일 전류 양보 */
-#endif
-				c->vapor_step_cnt = 0U; c->vapor_step_since = now; c->vapor_phase = (uint8_t)DJ_VP_OPEN_AIR;
-			}
 		}
 		break;
-	case DJ_VP_OPEN_AIR:                              /* 3) 흡입 제어 OPEN       */
-		if (due)
-		{
-			StepMotor_Step(&dj_air, 1); c->vapor_step_cnt++; c->vapor_step_since = now;
-			if (c->vapor_step_cnt >= (uint16_t)DJ_DUCT_STEPS)
-			{ c->vapor_phase = (uint8_t)DJ_VP_OPEN; }
-		}
+	case DJ_VP_OPEN_AIR:                              /* 3) 흡입 제어 OPEN (1s)  */
+		if (done)      { c->vapor_phase = (uint8_t)DJ_VP_OPEN; }
+		else if (due)  { StepMotor_Step(&dj_air, 1); c->vapor_step_cnt++; c->vapor_step_since = now; }
 		break;
 	case DJ_VP_OPEN:
 		if (t <= (int16_t)DJ_TEMP_VAPOR_OFF_D10)      /* 84℃: 역순 폐쇄 시작     */
 		{
-			c->vapor_step_cnt = 0U; c->vapor_step_since = now;
-			c->vapor_phase = (uint8_t)DJ_VP_CLOSE_AIR;
+			dj_vapor_move_begin(c, (uint8_t)DJ_VP_CLOSE_AIR, now);
 		}
 		break;
-	case DJ_VP_CLOSE_AIR:                             /* 1') 흡입 CLOSE          */
-		if (due)
+	case DJ_VP_CLOSE_AIR:                             /* 1') 흡입 CLOSE (2s)     */
+		if (done)
+		{
+			StepMotor_Release(&dj_air);
+			dj_vapor_move_begin(c, (uint8_t)DJ_VP_CLOSE_DUCT, now);
+		}
+		else if (due)
 		{
 			StepMotor_Step(&dj_air, -1); c->vapor_step_cnt++; c->vapor_step_since = now;
-			if (c->vapor_step_cnt >= (uint16_t)DJ_DUCT_STEPS)
-			{ StepMotor_Release(&dj_air); c->vapor_step_cnt = 0U; c->vapor_step_since = now; c->vapor_phase = (uint8_t)DJ_VP_CLOSE_DUCT; }
 		}
 		break;
-	case DJ_VP_CLOSE_DUCT:                            /* 2') 관로 CLOSE          */
+	case DJ_VP_CLOSE_DUCT:                            /* 2') 관로 CLOSE (15s)    */
 	default:
-		if (due)
+		if (done)
+		{
+			StepMotor_Release(&dj_duct);
+			gpio_ctrl_off(GPIO_OUT_FAN_VAPOR);   /* 3') 방수팬 OFF (배기팬은 fanx 독립) */
+			c->vapor_phase = (uint8_t)DJ_VP_CLOSED;
+		}
+		else if (due)
 		{
 			StepMotor_Step(&dj_duct, -1); c->vapor_step_cnt++; c->vapor_step_since = now;
-			if (c->vapor_step_cnt >= (uint16_t)DJ_DUCT_STEPS)
-			{
-				StepMotor_Release(&dj_duct);
-				gpio_ctrl_off(GPIO_OUT_FAN_VAPOR);   /* 3') 방수팬 OFF (배기팬은 fanx 독립) */
-				c->vapor_phase = (uint8_t)DJ_VP_CLOSED;
-			}
 		}
 		break;
 	}
@@ -600,9 +611,8 @@ static uint8_t dj_cool_reached(DongjakCtx *c)
 static void dj_rs_close(DongjakCtx *c, uint32_t now, DongjakState next)
 {
 	uint32_t el = now - c->state_since;
-	if (dj_door_done(WDoor_AtClose(), el))
+	if (dj_wdoor_done(WDoor_ReachedClose(), 0U, el))
 	{ WDoor_Stop(); WDoor_Disable(); dj_enter(c, next, now); }
-	else if (el >= (uint32_t)DJ_DOOR_TIMEOUT_MS) { dj_fail(c, DJ_ERR_RINSE_CLOSE, now); }
 }
 
 static void dj_rs_fill(DongjakCtx *c, uint32_t now, DongjakState next)
@@ -620,7 +630,7 @@ static void dj_rs_fill_extra(DongjakCtx *c, uint32_t now, DongjakState next)
 
 static void dj_rs_stir(DongjakCtx *c, uint32_t now, DongjakState next)
 {
-	dj_stir313_tick(c, now, (uint16_t)DJ_RINSE_STIR_RPM);
+	dj_stir_rinse_tick(c, now);
 	if ((now - c->state_since) >= (uint32_t)DJ_RINSE_STIR_MS)
 	{ BldcCtrl_Stop(&g_stir_ctrl); dj_enter(c, next, now); }
 }
@@ -628,15 +638,15 @@ static void dj_rs_stir(DongjakCtx *c, uint32_t now, DongjakState next)
 static void dj_rs_open(DongjakCtx *c, uint32_t now, DongjakState next)
 {
 	uint32_t el = now - c->state_since;
-	if (dj_door_done(WDoor_AtOpen(), el))
+	if (dj_wdoor_done(WDoor_ReachedOpen(), 1U, el))
 	{ WDoor_Stop(); WDoor_Disable(); dj_enter(c, next, now); }
-	else if (el >= (uint32_t)DJ_DOOR_TIMEOUT_MS) { dj_fail(c, DJ_ERR_RINSE_OPEN, now); }
+	else { WDoor_Open(WDoor_OpenDutyAt(el)); }     /* 킥 80%(2s) -> 65% 유지 */
 }
 
 /* 배수: 문 열린 채 교반하며 물빼기(잔수 배수). 지속시간만 1·2차 다름. */
 static void dj_rs_drain(DongjakCtx *c, uint32_t now, uint32_t dur, DongjakState next)
 {
-	dj_stir313_tick(c, now, (uint16_t)DJ_RINSE_STIR_RPM);
+	dj_stir_rinse_tick(c, now);
 	if ((now - c->state_since) >= dur)
 	{ BldcCtrl_Stop(&g_stir_ctrl); dj_enter(c, next, now); }
 }
@@ -692,7 +702,9 @@ static void dj_disch_begin_close(DongjakCtx *c, uint32_t now)
 	BldcCtrl_Stop(&g_stir_ctrl);
 	TDoor_Stop();
 	c->disc_pulse_off = 0U;                        /* 간헐 구동 위상 리셋      */
-	TDoor_Enable(); TDoor_Close((uint8_t)DJ_DOOR_DUTY_PCT);
+	TDoor_LimitArm();                              /* 개방 이동의 stale 엣지 제거 */
+	dj_tdoor_arm();                                /* 추가회전 래치 초기화      */
+	TDoor_Enable(); TDoor_Close((uint8_t)TDOOR_DUTY);
 	dj_disc_enter(c, DJ_DS_CLOSE_T, now);
 }
 
@@ -700,6 +712,8 @@ static void dj_disch_begin_close(DongjakCtx *c, uint32_t now)
  * DJ_DISCH_DOOR_PULSE_AFTER_MS까지는 손대지 않으므로(연속 구동) 정상 개폐
  * 시간대의 동작은 기존과 동일하고, 그 이후에만 ON/OFF를 반복해 스톨 열을 줄인다.
  * 휴지 구간엔 코스트 + VM(EN) OFF. 상태가 바뀌는 순간에만 드라이버를 건드린다.
+ * ★리미트 엣지 래치는 여기서 재무장하지 않는다 — 재무장하면 휴지 구간에 도달한
+ * 엣지가 지워져 영영 인식되지 않는다(무장은 이동 개시 1회뿐).
  * el = 해당 위상(개방/닫힘) 구동 경과, opening: 1=개방(CW) 0=닫힘(CCW). */
 static void dj_tdoor_keep_driving(DongjakCtx *c, uint8_t opening, uint32_t el)
 {
@@ -718,8 +732,8 @@ static void dj_tdoor_keep_driving(DongjakCtx *c, uint8_t opening, uint32_t el)
 	else
 	{
 		TDoor_Enable();                                        /* 재구동        */
-		if (opening) { TDoor_Open ((uint8_t)DJ_DOOR_DUTY_PCT); }
-		else         { TDoor_Close((uint8_t)DJ_DOOR_DUTY_PCT); }
+		if (opening) { TDoor_Open ((uint8_t)TDOOR_DUTY); }
+		else         { TDoor_Close((uint8_t)TDOOR_DUTY); }
 	}
 #else
 	(void)c; (void)opening; (void)el;
@@ -732,9 +746,9 @@ static void dj_discharge_tick(DongjakCtx *c, uint32_t now)
 	switch ((DjDischPhase)c->disc_phase)
 	{
 	case DJ_DS_OPEN_T:                                /* 배출문 개방(CW)        */
-		if (dj_tdoor_done(TDoor_AtOpen(), el))
+		if (dj_tdoor_done(TDoor_ReachedOpen(), 1U, el))
 		{
-			c->disc_open_ms = el;                    /* 리미트 인식까지 실측 시간 기록 */
+			c->disc_open_ms = el;                    /* 종료까지 실측 시간 기록  */
 			TDoor_Stop(); TDoor_Disable();           /* 개방 후 DC 미구동(HW 2분타이머 구간) */
 			/* 배출문 열림 = HW 2분 타이머 시작. 그 종료는 TIMER-OUT(PF8) 하강엣지로
 			 * 인식(신스펙 항목8). 진입 직전 stale 엣지 플래그 제거. */
@@ -748,9 +762,6 @@ static void dj_discharge_tick(DongjakCtx *c, uint32_t now)
 			 * 닫기(CCW)로 전환한다. disc_open_ms는 0(미도달)으로 남는다. */
 			dj_disch_begin_close(c, now);
 		}
-#if !DJ_DISCH_DOOR_NO_TIMEOUT
-		else if (el >= (uint32_t)DJ_DOOR_TIMEOUT_MS) { dj_fail(c, DJ_ERR_DISCH_OPEN, now); }
-#endif
 		else { dj_tdoor_keep_driving(c, 1U, el); }   /* 개방(CW) 유지 - 길어지면 간헐 */
 		break;
 
@@ -784,30 +795,26 @@ static void dj_discharge_tick(DongjakCtx *c, uint32_t now)
 		break;
 
 	case DJ_DS_CLOSE_T:                               /* 배출문 닫음(CCW, 래치 해제) */
-		if (dj_tdoor_done(TDoor_AtClose(), el))
+		if (dj_tdoor_done(TDoor_ReachedClose(), 0U, el))
 		{
-			c->disc_close_ms = el;                   /* 리미트 인식까지 실측 시간 기록 */
+			c->disc_close_ms = el;                   /* 종료까지 실측 시간 기록  */
 			TDoor_Stop(); TDoor_Disable();
 			dj_wdoor_open();                             /* 배수부 완전개방(배수밸브 동반) */
 			dj_disc_enter(c, DJ_DS_OPEN_W, now);
 		}
-#if !DJ_DISCH_DOOR_NO_TIMEOUT
-		else if (el >= (uint32_t)DJ_DOOR_TIMEOUT_MS) { dj_fail(c, DJ_ERR_DISCH_CLOSE, now); }
-#endif
-		/* NO_TIMEOUT=1: 닫힐 때까지 계속 CCW 구동(시간 상한 없음). 15초를 넘기면
-		 * 간헐 구동으로 전환해 스톨 열을 줄인다. 완전 탈출은 정지요청으로만. */
+		/* 닫힘도 THALL 인식 + 1s 추가회전, 상한 TDOOR_CLOSE_MAX_MS(14.3s). */
 		else { dj_tdoor_keep_driving(c, 0U, el); }
 		break;
 
 	case DJ_DS_OPEN_W:
 	default:
-		if (dj_door_done(WDoor_AtOpen(), el))
+		if (dj_wdoor_done(WDoor_ReachedOpen(), 1U, el))
 		{
 			WDoor_Stop(); WDoor_Disable();
 			c->cycle_count++;
 			dj_enter(c, DJ_DONE, now);
 		}
-		else if (el >= (uint32_t)DJ_DOOR_TIMEOUT_MS) { dj_fail(c, DJ_ERR_DISCH_WOPEN, now); }
+		else { WDoor_Open(WDoor_OpenDutyAt(el)); }   /* 킥 80%(2s) -> 65% 유지 */
 		break;
 	}
 }
@@ -869,7 +876,9 @@ static void dj_enter(DongjakCtx *c, DongjakState s, uint32_t now)
 		 * 분쇄는 tick에서 1000 CCW. 80℃ 미만으로 식으면 cool_phase=1 전환. */
 		c->cool_phase = 0U;
 		gpio_ctrl_exti_flag_clear(GPIO_EXTI_BIMETAL_80); /* 80℃ 바이메탈 stale 엣지 제거 */
-		dj_stir_spin(0U, (uint16_t)DJ_STIR_RPM);     /* 교반 지속 CW 개시        */
+		/* ★80℃'이상' 구간의 지속 CW 는 2026-08-26 변경 대상이 아니다(지시는
+		 * '식힘 교반 80℃ 미만'). 그래서 20RPM 전용 상수를 따로 쓴다. */
+		dj_stir_spin(0U, (uint16_t)DJ_COOL_HOT_STIR_RPM);
 #if DJ_TEST_FAST_TIMING
 		dj_test_beep(2U);                            /* [TEST] 8분대(120분) 삑삑 */
 #endif
@@ -888,7 +897,9 @@ static void dj_enter(DongjakCtx *c, DongjakState s, uint32_t now)
 #endif
 		/* 배출문 개방 = 정방향(CW). 리미트(THALL_OPEN, PF5) 인식까지 계속 구동. */
 		c->disc_open_ms = 0U; c->disc_close_ms = 0U; c->disc_pulse_off = 0U;
-		TDoor_Enable(); TDoor_Open((uint8_t)DJ_DOOR_DUTY_PCT);
+		TDoor_LimitArm();                            /* 리미트 엣지 래치 무장    */
+		dj_tdoor_arm();                              /* 추가회전 래치 초기화      */
+		TDoor_Enable(); TDoor_Open((uint8_t)TDOOR_DUTY);
 		dj_disc_enter(c, DJ_DS_OPEN_T, now);
 		break;
 
@@ -918,6 +929,7 @@ void Dongjak_Init(void)
 	DongjakCtx *c = &g_dongjak;
 	c->state = (uint8_t)DJ_IDLE; c->state_since = 0U; c->scn_start = 0U;
 	c->start_req = 0U; c->dbg_force_start = 0U; c->dbg_enter_heat = 0U;
+	c->dbg_enter_cool = 0U;
 #if DJ_TEST_FAST_TIMING
 	c->dbg_beep = 0U;
 #endif
@@ -930,10 +942,11 @@ void Dongjak_Init(void)
 #if DJ_TEST_FAST_TIMING
 	c->test_beeped_hi = 0U;                       /* [TEST] 비프 래치 리셋 */
 #endif
-	c->stir_phase = 0U; c->stir_since = 0U; c->stir_reps = 0U;
+	c->stir_phase = 0U; c->stir_since = 0U;
 	c->grind_mode = (uint8_t)DJ_GM_OFF; c->grind_phase = 0U; c->grind_final_ph = 0U;
 	c->grind_since = 0U; c->grind_start = 0U; c->cool_phase = 0U;
-	c->vapor_phase = (uint8_t)DJ_VP_CLOSED; c->vapor_step_since = 0U; c->vapor_step_cnt = 0U;
+	c->vapor_phase = (uint8_t)DJ_VP_CLOSED; c->vapor_step_since = 0U;
+	c->vapor_move_since = 0U; c->vapor_step_cnt = 0U;
 	c->fanb_on = 0U; c->fanb_since = 0U;
 	c->fanx_on = 0U; c->fanx_since = 0U;
 	c->disc_phase = 0U; c->disc_since = 0U;
@@ -953,6 +966,7 @@ void Dongjak_Abort(void)
 	dj_all_off();
 	g_dongjak.start_req    = 0U;
 	g_dongjak.dbg_enter_heat = 0U;
+	g_dongjak.dbg_enter_cool = 0U;
 	g_dongjak.abort_req    = 0U;
 	g_dongjak.dbg_force_stop = 0U;
 	g_dongjak.lid_guard    = 0U;
@@ -1002,11 +1016,46 @@ void Dongjak_DebugEnterHeat(uint8_t skip_door)
 	{
 		WDoor_Stop(); WDoor_Disable();               /* 도어 구동 즉시 정지        */
 		c->heat_started = 1U; c->heat_since = now;   /* 가열중으로 강제            */
-		dj_stir_dry_begin(c, now);                   /* 교반 CW 즉시 개시          */
+		dj_stir313_begin(c, now, (uint16_t)DJ_STIR_RPM); /* 교반 CW 즉시 개시      */
 		c->grind_mode  = (uint8_t)DJ_GM_OFF; c->grind_start = 0U;
 		c->vapor_phase = (uint8_t)DJ_VP_CLOSED;
 		c->fanb_on = 0U; c->fanb_since = now;
 	}
+}
+
+/* [디버그/벤치 전용] 헹굼·건조를 건너뛰고 **식힘 교반(80℃ 미만)** 부터 시작.
+ * 2026-08-26 신설 - 앱 '동작 (식힘부터)' 버튼(PROTO_ACT_DJ_COOL).
+ *
+ * DJ_HEAT 직행(Dongjak_DebugEnterHeat)과 두 가지가 다르다:
+ *
+ * 1) scn_start 를 now 가 아니라 **now - DJ_T_COOLDOWN_MS(120분)** 로 잡는다.
+ *    식힘은 시나리오 중간 구간이라 경과를 0 으로 리셋하면 (a) 앱 타임라인이
+ *    "120분 구간인데 경과 0분"으로 어긋남 표시를 내고(enums.dj_state_range(14)
+ *    의 하한이 식힘 마커다), (b) 130분 배출 전환까지 130분을 통째로 기다리게
+ *    된다. 120분 지점에서 시작한 것으로 만들면 10분 뒤 배출로 자연히 이어진다.
+ *    ※ uint32 modular 연산이라 부팅 직후(now < 120분)에도 (now - scn_start)
+ *      = DJ_T_COOLDOWN_MS 로 정확히 나온다.
+ *
+ * 2) 진입 후 cool_phase 를 **1(식음)** 로 강제한다. dj_enter(DJ_COOLDOWN) 은
+ *    cool_phase=0(뜨거움: 분쇄 1000 CCW + 교반 지속 CW 20RPM)으로 들어가므로,
+ *    그대로 두면 온도가 80℃ 밑으로 내려갈 때까지 목적 동작이 시작되지 않는다.
+ *    분쇄 OFF + 교반 313(30RPM CW6/정지1/CCW6)까지 여기서 세워 둔다.
+ *
+ * g_app_mode=DONGJAK 에서만 tick 이 돌아 실제로 진행된다. */
+void Dongjak_DebugEnterCool(void)
+{
+	DongjakCtx *c   = &g_dongjak;
+	uint32_t    now = HAL_GetTick();
+
+	dj_vapor_off(c);                                 /* 수증기 루프 종료(HEAT 전용) */
+	dj_fan_exhaust_begin(c, now);                    /* 배기팬 15/2 duty 개시     */
+	dj_enter(c, DJ_COOLDOWN, now);                   /* 히터 OFF + cool_phase=0   */
+	c->scn_start = now - (uint32_t)DJ_T_COOLDOWN_MS; /* 경과 = 120분 지점         */
+
+	/* '80℃ 미만' 구간으로 강제: 분쇄 OFF + 교반 3구간 패턴 개시. */
+	dj_grind_apply_mode(c, DJ_GM_OFF, now);
+	dj_stir313_begin(c, now, (uint16_t)DJ_STIR_RPM);
+	c->cool_phase = 1U;
 }
 
 /* 100ms, StartDefaultTask - 센서만. */
@@ -1045,7 +1094,7 @@ void Dongjak_SenseTick(void)
 	}
 #endif
 #else  /* !DJ_HS_TRIGGER_INTERNAL - 중재자(mode_arbiter.c)가 트리거를 소유 */
-	/* HS5 시작 에지와 마개 이탈(HS_LOST) 감시는 중재자가 담당한다. 여기서 또
+	/* HS2 시작 에지와 마개 이탈(HS_LOST) 감시는 중재자가 담당한다. 여기서 또
 	 * 읽으면 같은 이벤트가 이중 처리된다. 벤치 강제 시작만 유효. */
 	if (g_dongjak.dbg_force_start != 0U)
 	{
@@ -1093,6 +1142,11 @@ void Dongjak_MotorTick(uint32_t now_ms)
 		uint8_t sk = (uint8_t)(c->dbg_enter_heat == 2U);
 		c->dbg_enter_heat = 0U;
 		Dongjak_DebugEnterHeat(sk);
+	}
+	if (c->dbg_enter_cool)
+	{
+		c->dbg_enter_cool = 0U;
+		Dongjak_DebugEnterCool();
 	}
 
 #if DJ_TEST_FAST_TIMING
@@ -1164,18 +1218,17 @@ void Dongjak_MotorTick(uint32_t now_ms)
 	case DJ_HEAT:
 		if (!c->heat_started)
 		{
-			if (dj_door_done(WDoor_AtClose(), el))
+			if (dj_wdoor_done(WDoor_ReachedClose(), 0U, el))
 			{
 				WDoor_Stop(); WDoor_Disable();
 				c->heat_started = 1U; c->heat_since = now_ms;
-				dj_stir_dry_begin(c, now_ms);
+				dj_stir313_begin(c, now_ms, (uint16_t)DJ_STIR_RPM);
 				c->grind_mode = (uint8_t)DJ_GM_OFF; c->grind_start = 0U;
 				c->vapor_phase = (uint8_t)DJ_VP_CLOSED;
 				/* 배기팬(fanx)은 시나리오 시작 시 이미 개시됨 — 재초기화하지 않아 15분/2분
 				 * duty를 시작부터 연속 유지(THERM3 무관 독립). */
 				c->fanb_on = 0U; c->fanb_since = now_ms;
 			}
-			else if (el >= (uint32_t)DJ_DOOR_TIMEOUT_MS) { dj_fail(c, DJ_ERR_HEAT_DOOR, now_ms); }
 			break;
 		}
 		/* 가열 진행: 히터/교반/분쇄/수증기/팬 동시 제어 */
@@ -1188,8 +1241,8 @@ void Dongjak_MotorTick(uint32_t now_ms)
 			dj_test_beep(1U);
 		}
 #endif
-		/* 교반: 건조 패턴(CW3/정지2 ×5 → CCW3) 유지, 110분↑ RPM만 20→27 (신스펙 항목3) */
-		dj_stir_dry_tick(c, now_ms,
+		/* 교반: 3구간 패턴(CW6/정지1/CCW6) 고정, 110분↑ RPM만 30→40 (2026-08-26) */
+		dj_stir313_tick(c, now_ms,
 		    (sel >= (uint32_t)DJ_T_HISPEED_MS) ? (uint16_t)DJ_STIR_RPM_HISPEED
 		                                       : (uint16_t)DJ_STIR_RPM);
 		dj_grind_heat_tick(c, now_ms, sel);
@@ -1205,7 +1258,7 @@ void Dongjak_MotorTick(uint32_t now_ms)
 	case DJ_COOLDOWN:
 		/* 히터 OFF(진입 시). 신스펙 식힘:
 		 *  - 80℃ 이상(아직 뜨거움): 교반 = 지속 CW, 분쇄 = 1000 CCW 연속.
-		 *  - 80℃ 미만(식음)      : 분쇄 OFF, 교반 = CW3/정지1/CCW3 반복. */
+		 *  - 80℃ 미만(식음)      : 분쇄 OFF, 교반 = 30RPM CW6/정지1/CCW6 반복. */
 		if (c->cool_phase == 0U)
 		{
 			dj_grind_apply_mode(c, DJ_GM_COOL, now_ms);    /* 1000 CCW 연속       */
@@ -1267,7 +1320,7 @@ void Dongjak_MotorTick(uint32_t now_ms)
 
 	case DJ_ERROR:
 		/* 에러 복구: err_clear_req(=Dongjak_ClearError) 세팅 시 IDLE(대기)로 복귀.
-		 * 액추에이터는 진입 시 dj_all_off로 이미 정지. 이후 새 시작(HS5/강제)으로
+		 * 액추에이터는 진입 시 dj_all_off로 이미 정지. 이후 새 시작(HS2/강제)으로
 		 * 처음부터 재개한다. err_code는 복구 직전까지 유지되어 원인 확인 가능. */
 		if (c->err_clear_req)
 		{

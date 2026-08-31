@@ -21,10 +21,10 @@ volatile uint8_t tb_hall_trig[TB_HALL_TRIG_COUNT] = {0};
 volatile uint8_t tb_hall_trig_mask = 0;
 
 volatile uint8_t tb_hall_hard_food = 0;   /* P0 강음(강한음식물) */
-volatile uint8_t tb_hall_collect   = 0;   /* P1 모음 */
+volatile uint8_t tb_hall_collect   = 0;   /* P4 모음 */
 volatile uint8_t tb_hall_stop      = 0;   /* P2 정지 */
 volatile uint8_t tb_hall_drain     = 0;   /* P3 배수 */
-volatile uint8_t tb_hall_run       = 0;   /* P4 동작 */
+volatile uint8_t tb_hall_run       = 0;   /* P1 동작 */
 
 volatile uint8_t tb_hall_stir_home   = 0;
 volatile uint8_t tb_hall_bin         = 0;

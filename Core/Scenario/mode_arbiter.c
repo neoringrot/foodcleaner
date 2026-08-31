@@ -26,11 +26,11 @@ static uint8_t modearb_decode(uint8_t mask)
 {
 	switch (mask & (uint8_t)MODEARB_HS_MASK)
 	{
-	case 0x01U: return (uint8_t)LID_POS_KANGEUM;  /* HS1 */
-	case 0x02U: return (uint8_t)LID_POS_MOEUM;    /* HS2 */
-	case 0x04U: return (uint8_t)LID_POS_JUNGJI;   /* HS3 */
-	case 0x08U: return (uint8_t)LID_POS_BAESU;    /* HS4 */
-	case 0x10U: return (uint8_t)LID_POS_DONGJAK;  /* HS5 */
+	case 0x01U: return (uint8_t)LID_POS_KANGEUM;  /* HS1 강음 */
+	case 0x02U: return (uint8_t)LID_POS_DONGJAK;  /* HS2 동작 */
+	case 0x04U: return (uint8_t)LID_POS_JUNGJI;   /* HS3 정지 */
+	case 0x08U: return (uint8_t)LID_POS_BAESU;    /* HS4 배수 */
+	case 0x10U: return (uint8_t)LID_POS_MOEUM;    /* HS5 모음 */
 	case 0x00U: return (uint8_t)LID_POS_NONE;
 	default:    return (uint8_t)LID_POS_MULTI;    /* 2비트 이상 */
 	}
@@ -45,6 +45,7 @@ static uint8_t modearb_pos_to_mode(uint8_t pos)
 	case LID_POS_MOEUM:   return (uint8_t)APP_MODE_MOEUM;
 	case LID_POS_BAESU:   return (uint8_t)APP_MODE_BAESU;
 	case LID_POS_DONGJAK: return (uint8_t)APP_MODE_DONGJAK;
+	case LID_POS_JUNGJI:  return (uint8_t)APP_MODE_JUNGJI;
 	default:              return (uint8_t)APP_MODE_TESTBENCH;
 	}
 }
@@ -56,9 +57,14 @@ static void modearb_on_pos_change(ModeArbCtx *a, uint8_t pos)
 	switch ((LidPos)pos)
 	{
 	case LID_POS_JUNGJI:
-		/* HS3 정지: 비상정지 후 대기 모드로. 4.5 정지버튼과 동일 취급. */
+		/* HS3 정지: 비상정지 후 APP_MODE_JUNGJI 로. 4.5 정지버튼과 동일 취급.
+		 * ★대기(TESTBENCH)가 아니라 전용 모드로 가는 이유: 마개가 정지 위치에
+		 *   머무는 동안 g_app_mode 로 그 사실이 보여야 한다(디버거/앱 STATUS).
+		 *   실행 성격은 대기와 같다 - 시나리오 tick 없음, 벤치 폴링 유지.
+		 *   빠져나오는 길: 마개를 다른 위치로(= 확정 에지) 또는 앱 정지 명령
+		 *   (PROTO_ACT_STOP -> APP_MODE_TESTBENCH). */
 		Jungji_Request(JUNGJI_SRC_HS_STOP, JUNGJI_KIND_EMERGENCY);
-		a->pend_mode  = (uint8_t)APP_MODE_TESTBENCH;
+		a->pend_mode  = (uint8_t)APP_MODE_JUNGJI;
 		a->pend_start = 0U;
 		a->pend_valid = 1U;
 		break;
@@ -105,6 +111,8 @@ void ModeArbiter_Init(void)
 	a->start_wait    = 0U;
 	a->pend_heat     = 0U;
 	a->heat_wait     = 0U;
+	a->pend_cool     = 0U;
+	a->cool_wait     = 0U;
 	a->dbg_disable   = 0U;
 	a->dbg_pos_force = 0U;
 	a->transitions   = 0U;
@@ -182,7 +190,8 @@ uint8_t ModeArbiter_RequestMode(app_mode_t mode, uint8_t start, uint8_t allow_st
 
 	a->pend_mode  = (uint8_t)mode;
 	a->pend_start = (uint8_t)(start ? 1U : 0U);
-	a->pend_heat  = 0U;             /* 일반 시작 요청은 DJ_HEAT 직행을 취소한다 */
+	a->pend_heat  = 0U;             /* 일반 시작 요청은 직행 요청을 취소한다   */
+	a->pend_cool  = 0U;
 	a->pend_valid = 1U;
 	return 1U;
 }
@@ -197,6 +206,22 @@ uint8_t ModeArbiter_RequestDongjakHeat(uint8_t skip_door)
 	a->pend_mode  = (uint8_t)APP_MODE_DONGJAK;
 	a->pend_start = 0U;             /* 정상 시작(헹굼부터)은 하지 않는다 */
 	a->pend_heat  = (uint8_t)(skip_door ? 2U : 1U);
+	a->pend_cool  = 0U;             /* 둘은 배타적이다 */
+	a->pend_valid = 1U;
+	return 1U;
+}
+
+uint8_t ModeArbiter_RequestDongjakCool(void)
+{
+	ModeArbCtx *a = &g_modearb;
+
+	if (a->dbg_disable != 0U)
+		return 0U;
+
+	a->pend_mode  = (uint8_t)APP_MODE_DONGJAK;
+	a->pend_start = 0U;
+	a->pend_heat  = 0U;             /* 둘은 배타적이다 */
+	a->pend_cool  = 1U;
 	a->pend_valid = 1U;
 	return 1U;
 }
@@ -221,18 +246,30 @@ void ModeArbiter_MotorTick(uint32_t now_ms)
 		a->pend_start = 0U;
 		a->heat_wait  = a->pend_heat;
 		a->pend_heat  = 0U;
+		a->cool_wait  = a->pend_cool;
+		a->pend_cool  = 0U;
 	}
 
 	/* 정지/제동이 끝난 뒤에 시작 지령. 제동 홀드 중에 Start 하면 BLDC 가
 	 * 단락제동 상태에서 기동 지령을 받게 되므로 반드시 기다린다. */
-	if (((a->start_wait != 0U) || (a->heat_wait != 0U)) &&
+	if (((a->start_wait != 0U) || (a->heat_wait != 0U) || (a->cool_wait != 0U)) &&
 	    (Jungji_IsBraking() == 0U))
 	{
 		uint8_t heat  = a->heat_wait;
+		uint8_t cool  = a->cool_wait;
 		a->start_wait = 0U;
 		a->heat_wait  = 0U;
+		a->cool_wait  = 0U;
 
-		if (heat != 0U)
+		if (cool != 0U)
+		{
+			/* ★식힘 직행. 세우는 지점이 heat 와 같은 이유는 위 주석 참조. */
+			if (g_app_mode == APP_MODE_DONGJAK)
+			{
+				g_dongjak.dbg_enter_cool = 1U;
+			}
+		}
+		else if (heat != 0U)
 		{
 			/* ★DJ_HEAT 직행(헹굼 생략). 여기서 세우는 이유가 중요하다:
 			 * 이 지점은 (1) 모드 전환의 Jungji_StopAll(=Dongjak_Abort, 이 변수를
@@ -252,6 +289,7 @@ void ModeArbiter_MotorTick(uint32_t now_ms)
 			case APP_MODE_DONGJAK: Dongjak_Start(); break;
 			case APP_MODE_KANGEUM: Kangeum_Start(); break;
 			case APP_MODE_BAESU:   Baesu_Start();   break;
+			case APP_MODE_JUNGJI:                   /* 정지: 시작할 것이 없다 */
 			case APP_MODE_TESTBENCH:
 			default:                                break;
 			}

@@ -77,8 +77,9 @@ void TB_Water_Init(void);
 
 /* Apply the enable flag: drive WATER-ON and refresh the sensor fields. Call
  * every poll. */
-/* tb_active: 1 = 벤치가 WATER-ON(PE2)을 소유해도 되는 상태(g_app_mode ==
- * APP_MODE_TESTBENCH). 0 이면 시나리오가 그 핀을 쓰는 중이므로 아무것도
+/* tb_active: 1 = 벤치가 WATER-ON(PE2)을 소유해도 되는 상태(AppMode_IsBenchIdle
+ * = 대기 APP_MODE_TESTBENCH 또는 정지 APP_MODE_JUNGJI).
+ * 0 이면 시나리오가 그 핀을 쓰는 중이므로 아무것도
  * 하지 않고 돌아온다 - tb_heat 의 HT-POWER 와 같은 규약이다. */
 void TB_Water_Poll(uint8_t tb_active);
 

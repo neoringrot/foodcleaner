@@ -26,7 +26,7 @@
 ## 공통 동작 모델
 
 - 모든 `TB_*_Poll()`은 `freertos.c`의 `MotorTask_RunTestbench()`에서만 호출된다
-  → **테스트벤치 모드(`g_app_mode == APP_MODE_TESTBENCH`, 부팅 기본값)에서만** 동작하고,
+  → **테스트벤치 모드(`AppMode_IsBenchIdle()` = 대기 `APP_MODE_TESTBENCH` 또는 정지 `APP_MODE_JUNGJI`, 부팅 기본값은 대기)에서만** 동작하고,
   모음/동작/강음/배수 시나리오 모드에서는 자동으로 무시된다
   (해당 모드에서는 시나리오 코드가 동일 액추에이터를 직접 소유).
   단 위 ⚠️ 항목대로 **모드를 정하는 주체가 마개 홀센서**라는 점에 주의.
@@ -123,13 +123,79 @@ DC 도어 모터. **레벨(level) 방식** (enable 동안 계속 구동, VM 전�
 | 변수 | 동작 | 기본값 |
 |------|------|--------|
 | `tb_wdoor_enable` | 1=구동 / 0=정지(coast+VM off) — 배수문 | 0 |
-| `tb_wdoor_duty` | PWM 0~100 % | 50 |
-| `tb_wdoor_reverse` | 0=Open, 1=Close | 0 |
+| `tb_wdoor_duty` | PWM 0~100 % — **프로파일 ON 중에는 펌웨어가 덮어쓰는 현재 duty 표시값** | 50 |
+| `tb_wdoor_reverse` | **0=닫힘(Close), 1=열림(Open)** — 벤치 확정 (투입문과 반대!) | 0 |
 | `tb_tdoor_enable` | 1=구동 / 0=정지 — 투입문 | 0 |
-| `tb_tdoor_duty` | PWM 0~100 % | 50 |
-| `tb_tdoor_reverse` | 0=Open, 1=Close | 0 |
+| `tb_tdoor_duty` | PWM 0~100 % — **프로파일 ON 중에는 펌웨어가 덮어쓰는 현재 duty 표시값** | 50 |
+| `tb_tdoor_reverse` | 0=열림(Open), 1=닫힘(Close) — 벤치 확정 (배수문과 반대!) | 0 |
+| `tb_wdoor_limit_stop` / `tb_tdoor_limit_stop` | 1=리밋 도달 시 자동 정지 / 0=프리런(구 동작) | 1 |
+| `tb_wdoor_limit_hit` / `tb_tdoor_limit_hit` | (읽기전용) 1=리밋으로 자동 정지됨 | 0 |
+| `tb_wdoor_profile` | 1=방향별 duty/시간 프로파일 / 0=`tb_wdoor_duty` 수동 | 1 |
+| `tb_wdoor_open_kick_duty` | [열림] 기동 구간 duty [%] | 80 |
+| `tb_wdoor_open_kick_ms` | [열림] 기동 구간 길이 [ms] | 2000 |
+| `tb_wdoor_open_run_duty` | [열림] 기동 후 유지 duty [%] | 65 |
+| `tb_wdoor_open_ms` | [열림] 최대 동작 시간 [ms] (리밋 미인식 시 백스톱) | 6000 |
+| `tb_wdoor_close_duty` | [닫힘] duty [%] (전 구간 고정) | 80 |
+| `tb_wdoor_close_ms` | [닫힘] 동작 시간 [ms], 만료 시 자동 정지 | 4200 |
+| `tb_wdoor_time_hit` | (읽기전용) 1=시간 만료로 정지됨 (리밋 아님) | 0 |
+| `tb_tdoor_profile` | 1=투입문 duty/추가회전 프로파일 / 0=`tb_tdoor_duty` 수동 | 1 |
+| `tb_tdoor_run_duty` | [투입문] duty [%] (전 구간 고정) | 80 |
+| `tb_tdoor_overrun_ms` | [투입문] 홀 인식 후 **추가 회전 시간** [ms] | 1000 |
+| `tb_tdoor_open_max_ms` | [투입문/열림] 최대 동작 시간 [ms] | 14300 |
+| `tb_tdoor_close_max_ms` | [투입문/닫힘] 최대 동작 시간 [ms] | 14300 |
+| `tb_tdoor_overrun` | (읽기전용) 1=홀 인식됨, 추가 회전 중 | 0 |
+| `tb_tdoor_time_hit` | (읽기전용) 1=상한 시간으로 정지됨 (홀 아님) | 0 |
 
-(WDoor = 배수문 = 실질적 배수구 도어. 물리 리밋/시간 제어는 없으므로 duty·시간 직접 관리.)
+**배수문 방향별 프로파일 (기본 ON, WDoor 전용).** 방향은 벤치 확정 — `tb_wdoor_reverse` **0=닫힘 / 1=열림**
+(투입문 `tb_tdoor_reverse`와 반대다. 두 문의 모터 배선 방향이 서로 반대라 그렇다).
+두 방향의 동작이 다르며, 기준 시각은 둘 다 "구동 시작 시점"이다.
+
+| 방향 | duty | 정지 조건 |
+|------|------|-----------|
+| 열림 (`reverse=1`) | 80 %(2 s) → 65 % 유지 | **WHALL-OPEN 리밋** (`tb_wdoor_limit_hit=1`). 리밋 미인식 대비 **6 s 상한**(`tb_wdoor_time_hit=1`) |
+| 닫힘 (`reverse=0`) | 80 % 고정 | **4.2 s 경과**(`tb_wdoor_time_hit=1`). 그 전에 WHALL-CLOSE 인식되면 리밋으로 정지 |
+
+구동 시작 = `tb_wdoor_enable`의 0→1 엣지. 구동 중 `tb_wdoor_reverse`를 뒤집으면 새 구동으로 보고
+기준 시각이 재시작된다(정지 상태에서 다시 떼어내야 하므로).
+프로파일이 켜져 있는 동안 `TB_DRV8871_Poll()`이 적용 중인 duty를 `tb_wdoor_duty`에 **직접 써 넣으므로**,
+디버거에서 그 변수로 현재 duty를 그대로 볼 수 있다. 반대로 그 사이에 손으로 duty를 쓰면 다음 폴에서
+덮어써진다 — 수동으로 잡고 싶으면 `tb_wdoor_profile = 0` (이때는 닫힘 4.2 s 시간제한도 적용되지 않는다).
+
+**투입문 프로파일 (기본 ON, TDoor 전용).** `tb_tdoor_enable=1`이면 `tb_tdoor_run_duty`(80 %) 고정으로 구동한다.
+배수문과 달리 **홀 리밋에서 즉시 서지 않는다** — 구동 방향의 홀(`TDoor_AtOpen()`/`AtClose()`)이 처음 확정되는
+순간 추가회전 구간을 걸어두고 `tb_tdoor_overrun_ms`(1000 ms) 동안 계속 돌린 뒤 coast + VM off,
+`tb_tdoor_enable`을 0으로 내리고 `tb_tdoor_limit_hit=1`을 세운다. 그 사이 `tb_tdoor_overrun=1`.
+추가회전 구간은 **래치**다 — 문이 자석을 지나가 홀 레벨이 풀려도 1초를 끝까지 채운다.
+(구동 중 `tb_tdoor_reverse`를 뒤집으면 반대쪽 리밋을 향한 새 구동으로 보고 래치를 버린다.)
+`tb_tdoor_profile = 0`이면 `tb_tdoor_duty` 수동 + 홀 인식 즉시 정지(추가회전 0).
+방향은 벤치 확정 — `tb_tdoor_reverse` 0=열림 / 1=닫힘. 두 방향 모두 동작이 같다(80 % 고정 + 홀 후 1 s 추가회전).
+
+| 방향 | duty | 정지 조건 |
+|------|------|-----------|
+| 열림 (`reverse=0`) | 80 % 고정 | THALL-OPEN 인식 → **+1 s 후** 정지(`tb_tdoor_limit_hit=1`). 상한 **14.3 s**(`tb_tdoor_time_hit=1`) |
+| 닫힘 (`reverse=1`) | 80 % 고정 | THALL-CLOSE 인식 → **+1 s 후** 정지(`tb_tdoor_limit_hit=1`). 상한 **14.3 s**(`tb_tdoor_time_hit=1`) |
+
+상한은 방향별 변수로 **개별 관리**한다(`tb_tdoor_open_max_ms` / `tb_tdoor_close_max_ms`, 기본 둘 다 14300).
+상한은 구동 시작(=`tb_tdoor_enable` 0→1 엣지, 방향 전환 시 재시작)부터 재는 **구동 전체의 하드 상한**이라,
+상한 직전에 홀이 인식되면 추가회전 1 s를 다 채우지 못하고 상한에서 잘린다(최대 구동시간이 14.3 s를 넘지 않음).
+
+**시나리오(모음·동작)와 값 공유.** 위 프로파일의 실제 수치는 이 벤치가 아니라 드라이버 헤더에 있다 —
+배수문은 `wdoor.h`의 `WDOOR_OPEN_KICK_DUTY/KICK_MS/RUN_DUTY/MAX_MS`·`WDOOR_CLOSE_DUTY/CLOSE_MS`,
+배출문은 `tdoor.h`의 `TDOOR_DUTY`·`TDOOR_OVERRUN_MS`·`TDOOR_OPEN_MAX_MS`/`TDOOR_CLOSE_MAX_MS`.
+`moeum.c`/`dongjak.c`가 같은 매크로를 쓰므로 **벤치에서 확인한 동작 = 제품 시나리오 동작**이다.
+벤치의 `tb_*` 변수는 그 값을 런타임에 흔들어보기 위한 복사본이고, 확정값은 헤더에 반영해야 한다.
+
+**리밋 자동 정지 (기본 ON).** `tb_*_limit_stop=1`이면 `TB_DRV8871_Poll()`이 *구동 중인 방향의* 홀 리밋만 감시한다 —
+`tb_*_reverse=0`(Open)이면 `WDoor_AtOpen()`/`TDoor_AtOpen()`, `=1`(Close)이면 `AtClose()` (시나리오와 동일한 디코드).
+연속 `TB_DOOR_LIMIT_CONFIRM`(5회 ≈ 5 ms @MotorTask 1 ms) 동안 asserted면 `Stop()`(coast) + `Disable()`(VM off) 후
+`tb_*_enable`을 스스로 0으로 내리고 `tb_*_limit_hit=1`을 세운다.
+**단 투입문(TDoor)은 즉시 서지 않고 `tb_tdoor_overrun_ms`(1 s)만큼 더 돈 뒤 정지한다** — 위 투입문 프로파일 참고.
+반대 방향 리밋은 막지 않으므로,
+리밋 위에 얹힌 상태에서 `tb_*_reverse`를 뒤집고 다시 `enable=1` 하면 리밋에서 빠져나올 수 있다.
+방향 미확정이거나 홀이 미결선이면 `tb_*_limit_stop=0`으로 두되 — 그 경우 **엔드스톱에서 계속 스톨**하므로
+직접 `tb_*_enable=0`을 써서 멈춰야 한다.
+
+(WDoor = 배수문 = 실질적 배수구 도어. 시간 제어는 없으므로 duty·시간은 여전히 직접 관리.)
 
 ## 3. `tb_stepmotor` — STEP1·STEP2 스테퍼
 
@@ -192,10 +258,10 @@ U24(TCA9554A, I2C1, 0x3B)에 연결된 홀센서 8입력(P0~P7)을 **모니터�
 | U24 핀 | bit | 신호 | 변수(레벨) | 엣지 카운터 |
 |--------|-----|------|-----------|-------------|
 | P0 (HS1) | 0 | 강음(강한음식물) | `tb_hall_trig[0]` / `tb_hall_hard_food` | `tb_hall_trig_events[0]` |
-| P1 (HS2) | 1 | 모음 | `tb_hall_trig[1]` / `tb_hall_collect` | `tb_hall_trig_events[1]` |
+| P1 (HS2) | 1 | 동작 | `tb_hall_trig[1]` / `tb_hall_run` | `tb_hall_trig_events[1]` |
 | P2 (HS3) | 2 | 정지 | `tb_hall_trig[2]` / `tb_hall_stop` | `tb_hall_trig_events[2]` |
 | P3 (HS4) | 3 | 배수 | `tb_hall_trig[3]` / `tb_hall_drain` | `tb_hall_trig_events[3]` |
-| P4 (HS5) | 4 | 동작 | `tb_hall_trig[4]` / `tb_hall_run` | `tb_hall_trig_events[4]` |
+| P4 (HS5) | 4 | 모음 | `tb_hall_trig[4]` / `tb_hall_collect` | `tb_hall_trig_events[4]` |
 | P5 (HS6) | 5 | 교반원점 | `tb_hall_stir_home` | `tb_hall_stir_home_events` |
 | P6 (HS7) | 6 | 수거통 | `tb_hall_bin` | `tb_hall_bin_events` |
 | P7 (HS8) | 7 | 리프트하단 | `tb_hall_lift_bottom` | `tb_hall_lift_bottom_events` |
@@ -207,6 +273,8 @@ U24(TCA9554A, I2C1, 0x3B)에 연결된 홀센서 8입력(P0~P7)을 **모니터�
 
 넷리스트 배선: HS1~HS5 → 커넥터 **J26**(핀 2~6), HS6/HS7/HS8 → **J28/J29/J30**. HS 라인에 **풀업 저항 없음**(각 네트 = J핀 + U24핀 2점).
 
+> **★2026-08-25 라벨 재정의**: 마개 순서가 `강음 / 동작 / 정지 / 배수 / 모음` 으로 바뀌어 **HS2 ↔ HS5 의 의미(모음/동작)가 맞교환**되었다. 배선·비트 위치는 그대로이고 라벨만 바뀐 것이라, 펌웨어에서는 `mode_arbiter.c` 디코드 표 · `MOEUM_HS_START_IDX`(1→4) · `DJ_HS_START_IDX`(4→1) · `TB_HALL_BIT_COLLECT`/`TB_HALL_BIT_RUN` 만 반대로 잡았다.
+
 > **★2026-08-15 — 이 모니터는 이제 "구경만 하는" 채널이 아니다.**
 > `tb_hall_trig_mask`(P0~P4)와 **완전히 같은 비트**를 [`mode_arbiter.c`](../Scenario/mode_arbiter.c)가
 > 소비해서 실제 모드 전환·정지를 일으킨다(`HallSensor_GetMask() & 0x1F`). 즉 여기서 보이는 트리거군
@@ -215,10 +283,10 @@ U24(TCA9554A, I2C1, 0x3B)에 연결된 홀센서 8입력(P0~P7)을 **모니터�
 > | `tb_hall_trig_mask` | `g_modearb.pos_stable` | 결과 |
 > |---|---|---|
 > | `0x01` HS1 | 1 `LID_POS_KANGEUM` | `APP_MODE_KANGEUM`(스텁) |
-> | `0x02` HS2 | 2 `LID_POS_MOEUM` | `APP_MODE_MOEUM` + `Moeum_Start()` |
-> | `0x04` HS3 | 3 `LID_POS_JUNGJI` | **비상정지** + 대기 모드 복귀 |
+> | `0x02` HS2 | 5 `LID_POS_DONGJAK` | `APP_MODE_DONGJAK` + `Dongjak_Start()` |
+> | `0x04` HS3 | 3 `LID_POS_JUNGJI` | **비상정지** + `APP_MODE_JUNGJI`(5) (★2026-08-25, 구: 대기 복귀) |
 > | `0x08` HS4 | 4 `LID_POS_BAESU` | `APP_MODE_BAESU`(스텁) |
-> | `0x10` HS5 | 5 `LID_POS_DONGJAK` | `APP_MODE_DONGJAK` + `Dongjak_Start()` |
+> | `0x10` HS5 | 2 `LID_POS_MOEUM` | `APP_MODE_MOEUM` + `Moeum_Start()` |
 > | `0x00` | 0 `LID_POS_NONE` | **비상정지**(마개 이탈), 모드는 유지 |
 > | 2비트 이상 | 6 `LID_POS_MULTI` | **비상정지**(홀 이상으로 판정) |
 >
@@ -231,7 +299,7 @@ U24(TCA9554A, I2C1, 0x3B)에 연결된 홀센서 8입력(P0~P7)을 **모니터�
 
 | 채널 | 핀 | 상태 |
 |------|----|------|
-| HS1 강음 / HS2 모음 / HS3 정지 / HS4 배수 / HS5 동작 | P0~P4 | ✅ **회로 수정 후 정상 동작 확인** |
+| HS1 강음 / HS2 동작 / HS3 정지 / HS4 배수 / HS5 모음 | P0~P4 | ✅ **회로 수정 후 정상 동작 확인** |
 | HS6 교반원점 / HS7 수거통 / HS8 리프트하단 | P5 / P6 / P7 | ✅ **정상 동작 확인 (2026-08-15)** |
 
 > **U24 홀센서 8채널(HS1~HS8) 전부 검증 완료.** HS1/HS2/HS3(P0/P1/P2)의 초기 전기적 커플링(아래 원인 분석)은
@@ -439,7 +507,7 @@ else                 { WATER-ON = LOW  (급수 OFF, 안전); }
 - **대상**: HT-POWER = PA12 = `o_HT_POWER` = `GPIO_OUT_HT_POWER`. MOC3063 제로크로스 옵토트라이악(Q31/Q32) → AC 히터.
 - **온도센서 연동(핵심)**: 히터는 눈감고 못 켠다. `tb_heat`는 NTC 프로브 1개(`tb_heat_ch`, 기본 CH0 = `DJ_TEMP_CH` = 처리통)의 **평활(EMA) 온도**(`Thermistor_GetCelsius_d10`)를 읽어 **동작 시나리오와 동일한 190/195℃ 히스테리시스**로 히터를 제어한다 → 센서가 루프 안에 있다. 자체 ADC는 하지 않고 `Thermistor_Tick()`가 캐시한 값을 재사용한다.
 - **공유 판정 함수**: HYST 모드의 ON/OFF/과열 판정은 `interface/heater_hyst.h`의 순수함수 `Heater_HystDecide()` / `Heater_IsOverTemp()`가 담당하며, **동작 시나리오 `dj_heater_tick()`도 같은 함수를 사용**한다 → 임계/거동이 이원화되지 않는다. MANUAL 모드와 idle-guard 워치독은 **테스트벤치 전용** 확장이고, 동작 시나리오에는 둘 다 없다.
-- **배치(중요)**: 온도(ADC1)는 `StartDefaultTask`만 읽는 규칙이라, `tb_heat`도 같은 태스크에서 `Thermistor_Tick()` **직후** 폴링한다. `TB_Heat_Poll(g_app_mode==APP_MODE_TESTBENCH)`로 호출 → **테스트벤치 모드일 때만** HT-POWER를 구동하고, 동작 시나리오 모드에서는 핀에 손대지 않는다(시나리오의 `dj_heater_tick`가 단독 소유). `tb_heat_enable=0`이면 항상 강제 OFF.
+- **배치(중요)**: 온도(ADC1)는 `StartDefaultTask`만 읽는 규칙이라, `tb_heat`도 같은 태스크에서 `Thermistor_Tick()` **직후** 폴링한다. `TB_Heat_Poll(AppMode_IsBenchIdle(g_app_mode))`로 호출 → **대기/정지 모드일 때만** HT-POWER를 구동하고, 동작 시나리오 모드에서는 핀에 손대지 않는다(시나리오의 `dj_heater_tick`가 단독 소유). `tb_heat_enable=0`이면 항상 강제 OFF.
 
 ### 타임드 로깅 세션 (5분 / 30초 샘플)
 
@@ -575,16 +643,26 @@ tb_stir_en      = 1
 tb_stir_spd_req = 1     // (자동 0으로 클리어 후 다시 1 쓰면 또 1단계)
 
 // 배수문 개방
-tb_wdoor_reverse = 0    // Open
-tb_wdoor_duty    = 60
-tb_wdoor_enable  = 1
+tb_wdoor_reverse = 1    // Open (배수문은 1이 열림)
+tb_wdoor_enable  = 1     // duty 80%(2s) -> 65% 자동 적용, tb_wdoor_duty에서 관찰
+                         // WHALL-OPEN 도달 시 자동으로 0, tb_wdoor_limit_hit=1 (미인식 시 6s 상한)
+
+// 배수문 닫힘 (80% 고정, 4.2초 후 자동 정지)
+tb_wdoor_reverse = 0    // Close (배수문은 0이 닫힘)
+tb_wdoor_enable  = 1     // 4.2s 경과 시 자동으로 0, tb_wdoor_time_hit=1
+
+// 투입문 개방 (80% 고정, 홀 인식 후 1초 더 돌고 정지)
+tb_tdoor_reverse = 0    // Open
+tb_tdoor_enable  = 1     // THALL-OPEN 인식 -> tb_tdoor_overrun=1 -> 1s 후
+                         // 자동으로 0, tb_tdoor_limit_hit=1
+                         // (홀 미인식 시 14.3s 상한, tb_tdoor_time_hit=1)
 
 // 급수 ON + 수위센서 감지 (tb_water_sen1/2_present, _events 관찰)
 tb_water_enable  = 1    // WATER-ON HIGH, SEN1/SEN2 인식 시작
 // ...확인 후...
 tb_water_enable  = 0    // 급수 OFF
 
-// [히터] ⚠️ 220V. g_app_mode == APP_MODE_TESTBENCH 상태에서만 동작.
+// [히터] ⚠️ 220V. AppMode_IsBenchIdle(g_app_mode) (대기/정지) 상태에서만 동작.
 // (A) 전기 결선만 확인 (MANUAL): 프로브 없이 트라이악 스위칭
 tb_heat_mode      = 0   // MANUAL
 tb_heat_manual_on = 1   // HT-POWER HIGH (안전차단은 계속 적용)
@@ -609,7 +687,7 @@ tb_heat_enable  = 1     // 프로브 가열/냉각하며 tb_heat_out 토글 관�
    `freertos.c`에 include + `TB_GpioOut_Init()` / `TB_GpioOut_Poll()` 통합 완료.
 3. `tb_hallsensor` **신규 생성**: U24 홀센서 8입력(트리거군 P0~P4 + 교반원점/수거통/리프트하단)
    `tb_hall_enable` 게이트 모니터. `freertos.c`의 `StartDefaultTask`에 include + `TB_HallSensor_Init()` / `TB_HallSensor_Poll()` 통합 완료.
-   - 트리거 라벨 확정: HS1 강음 / HS2 모음 / HS3 정지 / HS4 배수 / HS5 동작.
+   - 트리거 라벨 확정: HS1 강음 / HS2 동작 / HS3 정지 / HS4 배수 / HS5 모음 (2026-08-25 재정의, 이전 HS2 모음 / HS5 동작).
    - **디버깅 결과**: 초기 HS1/HS2/HS3(P0/P1/P2) 전기적 커플링(저임피던스 단락) → **회로 수정으로 해결**.
      **U24 홀센서 8채널(HS1~HS8) 전부 정상 확인(2026-08-15)**. 펌웨어 정상(디코드/읽기 경로 대칭) 확인. 상세는 위 §6 참조.
 4. `tb_thermistor` **신규 생성**: NTC 온도센서 3종(THERMISTER1/2/3) `tb_therm_enable` 게이트 모니터.
@@ -627,7 +705,7 @@ tb_heat_enable  = 1     // 프로브 가열/냉각하며 tb_heat_out 토글 관�
    - **빌드 구문검사 통과 / HW 동작 미검증**(보드 실측 대기). 시나리오 실행 중에는 급수 라인 충돌 방지를 위해 `tb_water_enable=0` 유지. 상세는 위 §8 참조.
 6. `tb_heat` **신규 생성**: 히터 `HT-POWER`(PA12) 제어 + **온도센서 연동**. NTC 평활온도(`Thermistor_GetCelsius_d10`)를 읽어 동작 시나리오와 동일한 190/195℃ 히스테리시스로 히터 제어(센서 in-loop), MANUAL 강제모드 별도.
    - 안전 3중: 210℃ 과열(래치)·최대 연속 ON 60s 워치독(래치)·센서 ERR 즉시 OFF(라이브). 기본 disable/off.
-   - **소유권 게이트**: 온도(ADC1) 규칙상 `defaultTask`에서 `Thermistor_Tick()` 직후 폴링. `TB_Heat_Poll(g_app_mode==APP_MODE_TESTBENCH)`로 테스트벤치 모드일 때만 HT-POWER 구동 → 동작 시나리오(`MotorTask`의 `dj_heater_tick`)와 핀 충돌 배제.
+   - **소유권 게이트**: 온도(ADC1) 규칙상 `defaultTask`에서 `Thermistor_Tick()` 직후 폴링. `TB_Heat_Poll(AppMode_IsBenchIdle(g_app_mode))`로 대기/정지 모드일 때만 HT-POWER 구동 → 동작 시나리오(`MotorTask`의 `dj_heater_tick`)와 핀 충돌 배제.
    - `freertos.c`에 include + `TB_Heat_Init()` / `TB_Heat_Poll()` 통합, `Debug/.../subdir.mk` 빌드 목록 추가. 구문검사(`arm-none-eabi-gcc -Wall`) 통과 / HW 미검증. **동작 시나리오는 이미 히터-온도 연동 완료** 상태이며 임계 기본값을 `DJ_TEMP_*`와 일치시킴. 상세는 위 §9 참조.
 7. `tb_doorhall` **신규 생성**: 도어 리밋홀 4입력(WHALL/THALL open/close, PF3/PF4/PF2/PF5 EXTI) `tb_doorhall_enable` 게이트 모니터. 프로덕션 `WDoor_/TDoor_AtOpen/AtClose` 재사용으로 at-limit이 시나리오와 일치, raw 레벨·falling-edge 카운트 노출.
    - `freertos.c` `StartDefaultTask`에 include + `TB_DoorHall_Init()` / `TB_DoorHall_Poll()` 통합, `Debug/.../subdir.mk` 빌드 목록 추가. 입력 전용이라 시나리오와 무충돌(항상 켜둬도 안전). 구문검사(`-Wall -Wextra`) 통과 / HW 미검증. 상세는 위 §10 참조.

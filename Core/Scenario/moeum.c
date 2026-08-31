@@ -9,9 +9,11 @@
  *               + GPIO_OUT_WATER_ON (PE2, 급수 펌프/메인 enable). 둘 함께 ON
  *               (수위센서 검증이 PE2 ON 상태에서 통수됨; MOEUM_FILL_USE_WATER_ON).
  *   - 교반     : g_stir_ctrl (M2/U16, BLDC 폐루프). Start(reverse)/Stop + target.
- *   - 리미트   : WDoor_AtClose()(PF3) / WDoor_AtOpen()(PF4).
+ *   - 리미트   : WDoor_ReachedClose()(PF3) / WDoor_ReachedOpen()(PF4).
+ *               EXTI 하강엣지 래치 OR 레벨. 이동 시작마다 WDoor_LimitArm()으로
+ *               무장 — 수위(WATER_SEN)와 동일한 엣지 처리 방식.
  *   - 수위     : GPIO_EXTI_WATER_SEN1/2 (PF6/PF7).
- *   - 시작입력 : HallSensor_Get(MOEUM_HS_START_IDX)  (docx: HS2=모음).
+ *   - 시작입력 : HallSensor_Get(MOEUM_HS_START_IDX)  (HS5=모음, 2026-08-25 재정의).
  * ========================================================================== */
 
 #include "moeum.h"
@@ -61,8 +63,8 @@ static void moeum_all_off(void)
 	WDoor_Disable();    /* VM off */
 }
 
-/* 교반을 지정 방향으로 25RPM 기동. BldcCtrl_Start는 spd_idx의 래더값(20)을
- * target으로 넣으므로, 직후 목표를 25로 덮어써 PI가 25로 슬루하도록 한다. */
+/* 교반을 지정 방향으로 MOEUM_STIR_OUT_RPM(30)으로 기동. BldcCtrl_Start는 spd_idx의
+ * 래더값(20)을 target으로 넣으므로, 직후 목표를 덮어써 PI가 30으로 슬루하도록 한다. */
 static void moeum_stir_spin(uint8_t reverse)
 {
 	BldcCtrl_Stop(&g_stir_ctrl);           /* 방향 전환은 정지 후에만 가능    */
@@ -86,7 +88,7 @@ static void moeum_stir_end(MoeumCtx *c)
 	BldcCtrl_Stop(&g_stir_ctrl);
 }
 
-/* 교반 1cycle = CW 3s -> 정지(딜레이) 1s -> CCW 3s = 7s. 22 cycle 반복.
+/* 교반 1cycle = CW 4s -> 정지(딜레이) 1s -> CCW 4s = 9s. MOEUM_STIR_CYCLES(22) 반복.
  * CCW 가 끝나는 지점이 cycle 경계이며 그때 stir_cycles++ 한다.
  * stir_active 인 동안 매 MotorTick 호출된다(STIR/DRAIN_OPEN/DRAIN_WAIT 공용). */
 static void moeum_stir_tick(MoeumCtx *c, uint32_t now)
@@ -117,7 +119,7 @@ static void moeum_stir_tick(MoeumCtx *c, uint32_t now)
 	default:
 		if (el >= (uint32_t)MOEUM_STIR_CCW_MS)
 		{
-			c->stir_cycles++;                  /* 1 cycle(7s) 완료           */
+			c->stir_cycles++;                  /* 1 cycle(9s) 완료           */
 			moeum_stir_spin(0U);               /* 다음 cycle: CW 재기동       */
 			c->stir_phase       = (uint8_t)MOEUM_STIR_CW;
 			c->stir_phase_since = now;
@@ -157,8 +159,9 @@ static void moeum_enter(MoeumCtx *c, MoeumState s, uint32_t now)
 	switch (s)
 	{
 	case MOEUM_DOOR_CLOSE:
+		WDoor_LimitArm();                      /* stale 리미트 엣지 제거      */
 		WDoor_Enable();
-		WDoor_Close((uint8_t)MOEUM_DOOR_DUTY_PCT);
+		WDoor_Close((uint8_t)WDOOR_CLOSE_DUTY); /* 닫힘: 80% 고정 (wdoor.h)   */
 		break;
 
 	case MOEUM_FILL:
@@ -177,8 +180,9 @@ static void moeum_enter(MoeumCtx *c, MoeumState s, uint32_t now)
 		break;
 
 	case MOEUM_DRAIN_OPEN:
+		WDoor_LimitArm();                      /* stale 리미트 엣지 제거      */
 		WDoor_Enable();
-		WDoor_Open((uint8_t)MOEUM_DOOR_DUTY_PCT);
+		WDoor_Open(WDoor_OpenDutyAt(0U));      /* 열림: 킥 80% (tick에서 갱신) */
 		break;                                 /* 교반은 계속 진행           */
 
 	case MOEUM_DRAIN_WAIT:
@@ -251,7 +255,7 @@ void Moeum_RequestStop(void)
 void Moeum_SenseTick(void)
 {
 #if MOEUM_HS_TRIGGER_INTERNAL
-	/* 시작 트리거: HS2(모음) 눌림 상승에지  OR  디버거 강제(dbg_force_start).
+	/* 시작 트리거: HS5(모음) 눌림 상승에지  OR  디버거 강제(dbg_force_start).
 	 * 둘 중 무엇이든 Moeum_Start()로 수렴 -> IDLE일 때만 start_req 래치.
 	 * (디버거에서 g_moeum.start_req=1 을 직접 세팅해도 MotorTick가 동일하게 소비) */
 	uint8_t hs      = HallSensor_Get((uint8_t)MOEUM_HS_START_IDX);
@@ -285,7 +289,7 @@ void Moeum_SenseTick(void)
 	}
 #endif
 #else  /* !MOEUM_HS_TRIGGER_INTERNAL - 중재자(mode_arbiter.c)가 트리거를 소유 */
-	/* HS2 상승에지 시작과 마개 이탈 감시는 중재자가 HS1~5를 통째로 디코딩해
+	/* HS5 상승에지 시작과 마개 이탈 감시는 중재자가 HS1~5를 통째로 디코딩해
 	 * 처리한다(Moeum_Start() / Jungji_Request(HS_LOST)). 여기서 HS를 또 읽으면
 	 * 같은 이벤트를 두 번 처리하게 되므로 읽지 않는다. hs_prev/lid_guard 는
 	 * 이 경로에서 쓰이지 않아 stale 될 일도 없다.
@@ -351,27 +355,14 @@ void Moeum_MotorTick(uint32_t now_ms)
 		break;
 
 	case MOEUM_DOOR_CLOSE:
-		if (WDoor_AtClose())
+		/* 닫힘은 시간이 정상 종료 조건(WDOOR_CLOSE_MS 4.2s). 그 전에 WHALL-CLOSE가
+		 * 인식되면 거기서 멈춘다 -- 테스트벤치 tb_wdoor(reverse=0)와 동일. */
+		if (WDoor_ReachedClose() || (el >= (uint32_t)WDOOR_CLOSE_MS))
 		{
 			WDoor_Stop();
 			WDoor_Disable();
 			moeum_enter(c, MOEUM_FILL, now_ms);
 		}
-#if MOEUM_DOOR_LIMIT_OPTIONAL
-		else if (el >= (uint32_t)MOEUM_DOOR_BENCH_MS)
-		{
-			/* 육안모드: 방향 미확정으로 리미트 미도달일 수 있음 -> 구동을 보여준
-			 * 뒤 ERROR 없이 다음 단계로 진행 (방향 확정 후 플래그 0으로) */
-			WDoor_Stop();
-			WDoor_Disable();
-			moeum_enter(c, MOEUM_FILL, now_ms);
-		}
-#else
-		else if (el >= (uint32_t)MOEUM_DOOR_TIMEOUT_MS)
-		{
-			moeum_enter(c, MOEUM_ERROR, now_ms);
-		}
-#endif
 		break;
 
 	case MOEUM_FILL:
@@ -402,28 +393,20 @@ void Moeum_MotorTick(uint32_t now_ms)
 		break;
 
 	case MOEUM_DRAIN_OPEN:
-		if (WDoor_AtOpen())
+		/* 열림은 WHALL-OPEN 인식이 정상 종료 조건, WDOOR_OPEN_MAX_MS(6s)는 미인식
+		 * 대비 상한. duty는 킥(80%,2s) -> 유지(65%)로 매 tick 재지령한다 --
+		 * 테스트벤치 tb_wdoor(reverse=1)와 동일. */
+		if (WDoor_ReachedOpen() || (el >= (uint32_t)WDOOR_OPEN_MAX_MS))
 		{
 			WDoor_Stop();
 			WDoor_Disable();
 			c->drain_open_since = now_ms;
 			moeum_enter(c, MOEUM_DRAIN_WAIT, now_ms);
 		}
-#if MOEUM_DOOR_LIMIT_OPTIONAL
-		else if (el >= (uint32_t)MOEUM_DOOR_BENCH_MS)
+		else
 		{
-			/* 육안모드: 리미트 미도달이어도 구동 관찰 후 진행 (교반은 계속) */
-			WDoor_Stop();
-			WDoor_Disable();
-			c->drain_open_since = now_ms;
-			moeum_enter(c, MOEUM_DRAIN_WAIT, now_ms);
+			WDoor_Open(WDoor_OpenDutyAt(el));
 		}
-#else
-		else if (el >= (uint32_t)MOEUM_DOOR_TIMEOUT_MS)
-		{
-			moeum_enter(c, MOEUM_ERROR, now_ms);
-		}
-#endif
 		break;
 
 	case MOEUM_DRAIN_WAIT:

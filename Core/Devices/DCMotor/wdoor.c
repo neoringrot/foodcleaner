@@ -26,16 +26,17 @@ void WDoor_Disable(void)
 	DRV8871_Disable(&wdoor);
 }
 
-/* Direction mapping is provisional (see wdoor.h) -- swap Forward/Reverse here
- * if the door opens the wrong way on the bench. */
+/* Direction mapping confirmed on the bench 2026-08-25 (see wdoor.h):
+ * **Forward = 닫힘, Reverse = 열림** -- the swap lives here so every caller can
+ * keep saying Open/Close and mean the physical motion. */
 void WDoor_Open(uint8_t duty_pct)
 {
-	DRV8871_Forward(&wdoor, duty_pct);
+	DRV8871_Reverse(&wdoor, duty_pct);
 }
 
 void WDoor_Close(uint8_t duty_pct)
 {
-	DRV8871_Reverse(&wdoor, duty_pct);
+	DRV8871_Forward(&wdoor, duty_pct);
 }
 
 void WDoor_Brake(void)
@@ -58,6 +59,31 @@ uint8_t WDoor_AtOpen(void)
 uint8_t WDoor_AtClose(void)
 {
 	return (gpio_ctrl_exti_read(GPIO_EXTI_WHALL_CLOSE) == DOOR_LIMIT_ACTIVE_HIGH) ? 1U : 0U;
+}
+
+/* Arrival latch (see wdoor.h): arm at move start, then test edge-or-level. The
+ * falling-edge flags are latched in EXTI ISR context by gpio_ctrl_exti_dispatch(),
+ * so a limit that is only passed through is still caught. */
+void WDoor_LimitArm(void)
+{
+	gpio_ctrl_exti_flag_clear(GPIO_EXTI_WHALL_OPEN);
+	gpio_ctrl_exti_flag_clear(GPIO_EXTI_WHALL_CLOSE);
+}
+
+uint8_t WDoor_ReachedOpen(void)
+{
+#if (DOOR_LIMIT_USE_EDGE && (DOOR_LIMIT_ACTIVE_HIGH == 0U))
+	if (gpio_ctrl_exti_flag_get(GPIO_EXTI_WHALL_OPEN)) { return 1U; }
+#endif
+	return WDoor_AtOpen();
+}
+
+uint8_t WDoor_ReachedClose(void)
+{
+#if (DOOR_LIMIT_USE_EDGE && (DOOR_LIMIT_ACTIVE_HIGH == 0U))
+	if (gpio_ctrl_exti_flag_get(GPIO_EXTI_WHALL_CLOSE)) { return 1U; }
+#endif
+	return WDoor_AtClose();
 }
 
 /* ---- 모니터링 read-only (protocol_r0 0x26 OUTPUT) -------------------- */

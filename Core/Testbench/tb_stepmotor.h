@@ -25,23 +25,36 @@ extern "C" {
  *     TB_StepMotor_Loop();     // never returns
  *
  * The tb_stepN_enable flags are the runtime switches: set one to 1 in the
- * debugger (live watch / expression) and that motor spins; set it back to 0 and
- * it stops. Direction, step period (speed) and hold-on-stop are tweakable live.
+ * debugger (live watch / expression) and that motor spins for a FIXED time,
+ * then stops and the flag self-clears back to 0 (set it to 1 again to repeat).
+ * Writing 0 early aborts the run. Direction, step period (speed) and
+ * hold-on-stop are tweakable live.
+ *
+ * Run times (2026-08-25 bench request):
+ *   STEP1 : 15 s regardless of direction  (tb_step1_run_ms)
+ *   STEP2 : dir=1 (close) 2 s             (tb_step2_run_close_ms)
+ *           dir=0 (open)  1 s             (tb_step2_run_open_ms)
+ * Direction meaning on both motors: dir 0 = 열림(open), dir 1 = 닫힘(close).
+ * The duration is latched at the moment enable goes 1, so changing dir mid-run
+ * does not change the already-started run length.
  *
  * Pacing (the L6470's internal speed engine has no equivalent here) is done in
  * TB_StepMotor_Poll() off HAL_GetTick(): one full step is issued every
  * tb_stepN_period_ms. Poll must be called at least that often -- osDelay(1) is
  * fine. Smaller period = faster; too small for an unknown motor loses steps. */
 
-extern volatile uint8_t  tb_step1_enable;    /* 1 = run STEP1, 0 = stop           */
-extern volatile uint8_t  tb_step1_dir;       /* 0 = forward, 1 = reverse          */
+extern volatile uint8_t  tb_step1_enable;    /* 1 = start a timed run, self-clears at the end */
+extern volatile uint8_t  tb_step1_dir;       /* 0 = 열림(open), 1 = 닫힘(close) */
 extern volatile uint16_t tb_step1_period_ms; /* ms per full step (>=1); speed knob */
 extern volatile uint8_t  tb_step1_hold;      /* 0 = release coils on stop, 1 = hold torque */
+extern volatile uint32_t tb_step1_run_ms;    /* run length, both directions (default 15000) */
 
-extern volatile uint8_t  tb_step2_enable;    /* 1 = run STEP2, 0 = stop           */
-extern volatile uint8_t  tb_step2_dir;       /* 0 = forward, 1 = reverse          */
+extern volatile uint8_t  tb_step2_enable;    /* 1 = start a timed run, self-clears at the end */
+extern volatile uint8_t  tb_step2_dir;       /* 0 = 열림(open), 1 = 닫힘(close) */
 extern volatile uint16_t tb_step2_period_ms; /* ms per full step (>=1); speed knob */
 extern volatile uint8_t  tb_step2_hold;      /* 0 = release coils on stop, 1 = hold torque */
+extern volatile uint32_t tb_step2_run_open_ms;  /* dir=0 열림 run length (default 1000)  */
+extern volatile uint32_t tb_step2_run_close_ms; /* dir=1 닫힘 run length (default 2000)  */
 
 void TB_StepMotor_Init(void);
 void TB_StepMotor_Poll(void);   /* apply current enable/dir/speed state; call frequently */

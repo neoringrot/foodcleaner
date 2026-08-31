@@ -18,10 +18,10 @@ extern "C" {
  * U24 pin map (HallSensor mask bit i = HSi+1 = U24 Pi, polarity-normalised so a
  * set bit always means the magnet is present):
  *   P0 (bit0, HS1) : 강음(강한음식물) trigger  -> tb_hall_trig[0] / tb_hall_hard_food
- *   P1 (bit1, HS2) : 모음 trigger              -> tb_hall_trig[1] / tb_hall_collect
+ *   P1 (bit1, HS2) : 동작 trigger              -> tb_hall_trig[1] / tb_hall_run
  *   P2 (bit2, HS3) : 정지 trigger              -> tb_hall_trig[2] / tb_hall_stop
  *   P3 (bit3, HS4) : 배수 trigger              -> tb_hall_trig[3] / tb_hall_drain
- *   P4 (bit4, HS5) : 동작 trigger              -> tb_hall_trig[4] / tb_hall_run
+ *   P4 (bit4, HS5) : 모음 trigger              -> tb_hall_trig[4] / tb_hall_collect
  *   P5 (bit5, HS6) : 교반원점 홀센서           -> tb_hall_stir_home
  *   P6 (bit6, HS7) : 수거통 홀센서             -> tb_hall_bin
  *   P7 (bit7, HS8) : 리프트하단 홀센서         -> tb_hall_lift_bottom
@@ -44,10 +44,10 @@ extern "C" {
 /* Bit index of each channel inside the HallSensor mask (bit i = U24 Pi). */
 #define TB_HALL_TRIG_COUNT      5U   /* P0..P4 trigger group */
 #define TB_HALL_BIT_HARD_FOOD   0U   /* P0 강음(강한음식물) */
-#define TB_HALL_BIT_COLLECT     1U   /* P1 모음  */
+#define TB_HALL_BIT_COLLECT     4U   /* P4 모음  (2026-08-25 라벨 재정의) */
 #define TB_HALL_BIT_STOP        2U   /* P2 정지  */
 #define TB_HALL_BIT_DRAIN       3U   /* P3 배수  */
-#define TB_HALL_BIT_RUN         4U   /* P4 동작  */
+#define TB_HALL_BIT_RUN         1U   /* P1 동작  (2026-08-25 라벨 재정의) */
 #define TB_HALL_BIT_STIR_HOME   5U   /* P5 교반원점  */
 #define TB_HALL_BIT_BIN         6U   /* P6 수거통    */
 #define TB_HALL_BIT_LIFT_BOTTOM 7U   /* P7 리프트하단 */
@@ -78,10 +78,10 @@ extern volatile uint8_t tb_hall_pinlevel;      /* full P0..P7 pin-voltage mask  
 extern volatile uint8_t tb_hall_trig[TB_HALL_TRIG_COUNT]; /* per-trigger 0/1     */
 extern volatile uint8_t tb_hall_trig_mask;     /* P0..P4 packed (0..0x1F)        */
 extern volatile uint8_t tb_hall_hard_food;     /* P0 강음(강한음식물) */
-extern volatile uint8_t tb_hall_collect;       /* P1 모음 */
+extern volatile uint8_t tb_hall_collect;       /* P4 모음 */
 extern volatile uint8_t tb_hall_stop;          /* P2 정지 */
 extern volatile uint8_t tb_hall_drain;         /* P3 배수 */
-extern volatile uint8_t tb_hall_run;           /* P4 동작 */
+extern volatile uint8_t tb_hall_run;           /* P1 동작 */
 
 /* Channels 2..4 - named position sensors (1 = magnet present). */
 extern volatile uint8_t tb_hall_stir_home;     /* P5 교반원점   */

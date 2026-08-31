@@ -10,11 +10,14 @@ volatile uint8_t  tb_step1_enable    = 0;
 volatile uint8_t  tb_step1_dir       = 0;
 volatile uint16_t tb_step1_period_ms = 3;
 volatile uint8_t  tb_step1_hold      = 0;
+volatile uint32_t tb_step1_run_ms    = 15000;   /* 15 s, both directions */
 
 volatile uint8_t  tb_step2_enable    = 0;
 volatile uint8_t  tb_step2_dir       = 0;
 volatile uint16_t tb_step2_period_ms = 3;
 volatile uint8_t  tb_step2_hold      = 0;
+volatile uint32_t tb_step2_run_open_ms  = 1000; /* dir=0 열림 : 1 s */
+volatile uint32_t tb_step2_run_close_ms = 2000; /* dir=1 닫힘 : 2 s */
 
 /* Phase order M1..M4 = connector J31 pins 2..5 = Orange/Yellow/Pink/Blue, which
  * is the 24BYJ48-895 stator ring order -- matches k_step_seq, so this natural
@@ -42,9 +45,15 @@ static StepMotor_HandleTypeDef step2 =
 };
 
 /* Per-motor pacing state: last-step tick and whether we are currently running
- * (so the enable->disable transition releases/holds exactly once). */
+ * (so the enable->disable transition releases/holds exactly once).
+ * stepN_armed/stepN_start/stepN_run_ms implement the timed run: the duration is
+ * latched when enable goes 0->1 and the flag self-clears when it elapses, so a
+ * mid-run dir change cannot stretch or shorten the run in progress. */
 static uint32_t step1_last, step2_last;
 static uint8_t  step1_running, step2_running;
+static uint8_t  step1_armed, step2_armed;
+static uint32_t step1_start, step2_start;
+static uint32_t step1_run_ms, step2_run_ms;
 
 void TB_StepMotor_Init(void)
 {
@@ -52,13 +61,32 @@ void TB_StepMotor_Init(void)
 	StepMotor_Init(&step2);
 	step1_last = step2_last = 0;
 	step1_running = step2_running = 0;
+	step1_armed = step2_armed = 0;
+	step1_start = step2_start = 0;
+	step1_run_ms = step2_run_ms = 0;
 }
 
 void TB_StepMotor_Poll(void)
 {
 	uint32_t now = HAL_GetTick();
 
-	/* ---- STEP1 ---- */
+	/* ---- STEP1 ---- : fixed tb_step1_run_ms (15 s) run, then self-stop */
+	if (tb_step1_enable && !step1_armed)
+	{
+		step1_armed  = 1;
+		step1_start  = now;
+		step1_run_ms = tb_step1_run_ms;
+	}
+	else if (!tb_step1_enable)
+	{
+		step1_armed = 0;                        /* aborted / re-armable */
+	}
+	if (step1_armed && (uint32_t)(now - step1_start) >= step1_run_ms)
+	{
+		tb_step1_enable = 0;                    /* time is up: stop below */
+		step1_armed     = 0;
+	}
+
 	if (tb_step1_enable)
 	{
 		uint16_t period = tb_step1_period_ms ? tb_step1_period_ms : 1U;
@@ -76,7 +104,23 @@ void TB_StepMotor_Poll(void)
 		step1_running = 0;
 	}
 
-	/* ---- STEP2 ---- */
+	/* ---- STEP2 ---- : dir=1 닫힘 2 s / dir=0 열림 1 s, then self-stop */
+	if (tb_step2_enable && !step2_armed)
+	{
+		step2_armed  = 1;
+		step2_start  = now;
+		step2_run_ms = tb_step2_dir ? tb_step2_run_close_ms : tb_step2_run_open_ms;
+	}
+	else if (!tb_step2_enable)
+	{
+		step2_armed = 0;
+	}
+	if (step2_armed && (uint32_t)(now - step2_start) >= step2_run_ms)
+	{
+		tb_step2_enable = 0;
+		step2_armed     = 0;
+	}
+
 	if (tb_step2_enable)
 	{
 		uint16_t period = tb_step2_period_ms ? tb_step2_period_ms : 1U;

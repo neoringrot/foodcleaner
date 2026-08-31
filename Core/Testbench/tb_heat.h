@@ -34,7 +34,7 @@ extern "C" {
  *      that same task, AFTER Thermistor_Tick(), never on StartMotorTask.
  *   2) HT-POWER is a shared actuator: in a SCENARIO (동작) the MotorTask owns
  *      it via dj_heater_tick(). To avoid two tasks fighting the pin, pass
- *      `testbench_active` = (g_app_mode == APP_MODE_TESTBENCH) into Poll(); it
+ *      `testbench_active` = AppMode_IsBenchIdle(g_app_mode) into Poll(); it
  *      only drives the pin when active and otherwise keeps its hands off so
  *      the scenario is the sole writer. It also self-disables (forces OFF)
  *      whenever tb_heat_enable == 0.
@@ -43,7 +43,7 @@ extern "C" {
  * load):
  *     AdcCtrl_Init(); Thermistor_Init(); TB_Heat_Init();
  *     for(;;){ ...; Thermistor_Tick(); ...;
- *              TB_Heat_Poll(g_app_mode == APP_MODE_TESTBENCH); osDelay(100); }
+ *              TB_Heat_Poll(AppMode_IsBenchIdle(g_app_mode)); osDelay(100); }
  *
  * ------------------------------------------------------------------------
  * SAFETY (this switches mains-voltage heat -- treat every default as armed):
@@ -133,7 +133,8 @@ extern volatile uint32_t    tb_heat_session_ms;     /* elapsed session time[ms]*
  * MX_GPIO_Init() / Thermistor_Init(). */
 void TB_Heat_Init(void);
 
-/* One service cycle. Pass testbench_active = (g_app_mode==APP_MODE_TESTBENCH):
+/* One service cycle. Pass testbench_active = AppMode_IsBenchIdle(g_app_mode)
+ * (대기 또는 정지, 즉 시나리오가 HT-POWER 를 쥐고 있지 않은 상태):
  *   active   -> run the enabled/mode/safety logic and drive HT-POWER.
  *   inactive -> keep hands off the pin (scenario owns it), reset internal
  *               timers so a later activation starts clean.

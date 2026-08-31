@@ -171,7 +171,8 @@ typedef enum
  *  1    fw_major
  *  2    fw_minor
  *  3    fw_patch
- *  4    app_mode         app_mode_t (0 대기/벤치, 1 모음, 2 동작, 3 강음, 4 배수)
+ *  4    app_mode         app_mode_t (0 대기/벤치, 1 모음, 2 동작, 3 강음, 4 배수,
+ *                        5 정지 - HS3 마개 정지 위치, 2026-08-25 신설)
  *  5    lid_pos          LidPos (마개 확정 위치)
  *  6-7  u16 uptime_s     부팅 후 경과 초
  */
@@ -492,7 +493,10 @@ typedef enum
 	 * 반복 검증할 때 쓴다 - 헹굼은 물과 시간을 쓴다. 시나리오 경과는 0부터 다시
 	 * 센다(Dongjak_DebugEnterHeat). */
 	PROTO_ACT_DJ_HEAT   = 0x07,  /* 배수문 닫힘 대기부터 (사양에 가깝다)      */
-	PROTO_ACT_DJ_HEAT_ND= 0x08   /* 도어 대기까지 생략, '가열중' 즉시 진입    */
+	PROTO_ACT_DJ_HEAT_ND= 0x08,  /* 도어 대기까지 생략, '가열중' 즉시 진입    */
+	/* 헹굼·건조를 건너뛰고 식힘 교반(80℃ 미만)부터. 2026-08-26 신설.
+	 * 경과를 120분 지점으로 맞춰 넣으므로 10분 뒤 배출로 자연히 이어진다. */
+	PROTO_ACT_DJ_COOL   = 0x09   /* 동작 식힘부터 (cool_phase=1 강제)         */
 } proto_action_t;
 
 /* 1 = 배수/강음 스텁도 시작을 허용(벤치에서 스텁 진입만 보고 싶을 때).

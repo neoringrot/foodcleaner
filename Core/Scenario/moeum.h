@@ -18,18 +18,18 @@ extern "C" {
  *                §2-1 도어 홀 극성). 아래 placeholder 상수는 벤치 확정 후 갱신.
  *
  * 시퀀스(락 미SET=정상 전제):
- *   1) HS2(모음) 눌림 감지 → 시작
+ *   1) HS5(모음) 눌림 감지 → 시작
  *   2) 배수문(U5, WDoor) 닫힘 구동             [MotorTick]
  *   3) 배수문 닫힘 인식(W-HALL-CLOSE, PF3) → 모터 정지
  *   4) 급수 솔밸브 ON (VALVE-DRY-IN, PB13, 최대)
  *   5) 수위센서(PF6/PF7) 감지 → 2초 추가급수 → 밸브 OFF
- *   6) 교반 BLDC(M2, U16) ~25RPM: CW 3s / 정지 1s / CCW 3s = 1cycle 7s x 22 (~2m30s)
+ *   6) 교반 BLDC(M2, U16) ~30RPM: CW 6s / 정지 1s / CCW 6s = 1cycle 13s x 11 (143s)
  *   7) 교반 지속 중 배수문 열림 구동            [MotorTick]
  *   8) 배수문 열림 인식(W-HALL-OPEN, PF4) → 도어 모터 정지
- *   9) 배수문 열림 후 약 1분 뒤 교반 정지 → 배수문 열린 상태로 종료
+ *   9) 배수문 열림 후 30초 뒤 교반 정지 → 배수문 열린 상태로 종료
  *
  * 태스크 배치(freertos.c):
- *   Moeum_SenseTick()  - StartDefaultTask(100ms). 센서만: 시작(HS2) 감지, 수위 감지.
+ *   Moeum_SenseTick()  - StartDefaultTask(100ms). 센서만: 시작(HS5) 감지, 수위 감지.
  *   Moeum_MotorTick()  - StartMotorTask(1ms). 모터/밸브 구동 + 상태 전이 소유(single owner).
  * 교반 폐루프는 moeum이 BldcCtrl_Start/Stop로 지령만 내리고, 실제 PI 실행을 위해
  * 호출자가 BldcCtrl_Tick(&g_stir_ctrl, now)를 매 틱 함께 호출해야 한다.
@@ -39,24 +39,42 @@ extern "C" {
  * ========================================================================== */
 
 /* ---- 튜닝 상수 (벤치 확정 전 placeholder 포함) --------------------------- */
-#ifndef MOEUM_DOOR_DUTY_PCT
-#define MOEUM_DOOR_DUTY_PCT     50U      /* 배수문 PWM 힘(docx: 50%)          */
-#endif
+/* [삭제 2026-08-25] 배수문의 duty/구동시간/리미트 처리는 전부 wdoor.h의 WDOOR_*
+ * 프로파일이 단일 출처다(테스트벤치 tb_drv8871과 동일 값·동일 규칙). 여기 있던
+ * MOEUM_DOOR_DUTY_PCT / MOEUM_DOOR_TIMEOUT_MS / MOEUM_DOOR_LIMIT_OPTIONAL /
+ * MOEUM_DOOR_BENCH_MS 는 참조처가 없는 채로 남아 "여기를 고치면 된다"고 오해를
+ * 주기에 지웠다. 도어 동작을 바꾸려면 wdoor.h 를 고칠 것.
+ *   닫힘 = Forward, WDOOR_CLOSE_DUTY(80%), WDOOR_CLOSE_MS(4.2s) 경과가 정상 종료
+ *   열림 = Reverse, 킥 80%(2s) -> 65%, WHALL-OPEN 인식이 정상 종료(상한 6s)
+ * 어느 쪽이든 리미트 미인식은 ERROR 가 아니라 시간으로 종료한다 - 미인식 자체는
+ * 앱 검증표의 '배수문 닫힘/열림 인식' 항목이 잡는다. */
+/* ★교반 패턴 이력: 25RPM CW3/정지1/CCW3(1cycle 7s)
+ *   -> 2026-08-25 30RPM CW4/정지1/CCW4(1cycle 9s)
+ *   -> 2026-08-26 30RPM CW6/정지1/CCW6(1cycle 13s)  ← 현재
+ * 동작 시나리오의 1·2차 교반 헹굼(dongjak.h DJ_RINSE_*)도 같은 구간을 쓴다.
+ * RPM 은 30 유지. */
 #ifndef MOEUM_STIR_OUT_RPM
-#define MOEUM_STIR_OUT_RPM      25U      /* 교반 출력축 RPM(약 25)            */
+#define MOEUM_STIR_OUT_RPM      30U      /* 교반 출력축 RPM(약 30)            */
 #endif
 #ifndef MOEUM_STIR_CCW_MS
-#define MOEUM_STIR_CCW_MS       3000U    /* CCW 구간 (사이클의 3번째)         */
+#define MOEUM_STIR_CCW_MS       6000U    /* CCW 구간 (사이클의 3번째)         */
 #endif
 #ifndef MOEUM_STIR_DELAY_MS
 #define MOEUM_STIR_DELAY_MS     1000U    /* 정지(딜레이) 구간                 */
 #endif
 #ifndef MOEUM_STIR_CW_MS
-#define MOEUM_STIR_CW_MS        3000U    /* CW 구간 (사이클의 1번째)          */
+#define MOEUM_STIR_CW_MS        6000U    /* CW 구간 (사이클의 1번째)          */
 #endif
 #ifndef MOEUM_STIR_CYCLES
-#define MOEUM_STIR_CYCLES       22U      /* 1cycle = CW3s+정지1s+CCW3s = 7s.
-                                          * 7s x 22 = 154s(~2m30s) 헹굼       */
+#define MOEUM_STIR_CYCLES       11U      /* 1cycle = CW6s+정지1s+CCW6s = 13s.
+                                          * ★2026-08-26 기준: 목표 총시간
+                                          * 2분30초(150s)에 '사이클을 내려서'
+                                          * 맞춘다 -> floor(150/13) = 11.
+                                          * 13s x 11 = 143s(2m23s).
+                                          * 12사이클이면 156s 로 150s 를 넘기므로
+                                          * 내림이 맞다. 사이클 길이를 바꾸면
+                                          * 이 값도 floor(150000/1cycle) 로
+                                          * 다시 계산할 것. */
 #endif
 #ifndef MOEUM_FILL_EXTRA_MS
 #define MOEUM_FILL_EXTRA_MS     2000U    /* 수위 감지 후 2초 추가 급수        */
@@ -68,27 +86,8 @@ extern "C" {
 #define MOEUM_FILL_USE_WATER_ON 1
 #endif
 #ifndef MOEUM_DRAIN_STIR_MS
-#define MOEUM_DRAIN_STIR_MS     60000U   /* 배수문 열림 후 1분 뒤 교반 정지   */
-#endif
-#ifndef MOEUM_DOOR_TIMEOUT_MS
-#define MOEUM_DOOR_TIMEOUT_MS   30000U   /* 도어 리미트 미도달 안전 타임아웃 30초.
-                                          * 닫힘(DOOR_CLOSE)/열림(DRAIN_OPEN) 두 곳이
-                                          * 같은 값을 쓴다. 15초이던 것을 늘렸다 -
-                                          * 실장치 배수문 행정이 15초에 근접해 정상
-                                          * 동작 중에도 타임아웃으로 빠질 여지가 있었다.
-                                          * 이 값은 '고장 판정' 기준이지 정상 행정시간이
-                                          * 아니므로 넉넉해야 한다. */
-#endif
-/* 도어 리미트(PF3/PF4) 처리 모드.
- *   0 = 정상/스펙: 리미트 인식으로만 다음 단계 진행, 미도달 시 MOEUM_DOOR_TIMEOUT_MS
- *       후 ERROR (W-HALL-CLOSE/OPEN 센서 게이팅). ← 실동작/검증 기본.
- *   1 = 벤치 육안 전용: 방향 미확정 등으로 리미트 미도달 시에도 ERROR 대신
- *       MOEUM_DOOR_BENCH_MS 만큼만 구동 후 진행(센서 무시). 모터 회전 관찰용 임시. */
-#ifndef MOEUM_DOOR_LIMIT_OPTIONAL
-#define MOEUM_DOOR_LIMIT_OPTIONAL 0
-#endif
-#ifndef MOEUM_DOOR_BENCH_MS
-#define MOEUM_DOOR_BENCH_MS     4000U    /* (육안모드) 리미트 무시 시 도어 구동 관찰 시간 */
+#define MOEUM_DRAIN_STIR_MS     30000U   /* 배수문 열림 후 30초 뒤 교반 정지  */
+                                         /* ★2026-08-26: 1분 -> 30초 변경.  */
 #endif
 #ifndef MOEUM_FILL_TIMEOUT_MS
 #define MOEUM_FILL_TIMEOUT_MS   1800000U /* 수위 감지 대기 타임아웃 30분.
@@ -103,17 +102,20 @@ extern "C" {
                                           * 짧으면 정상 급수 중에도 MOEUM_ERROR 로
                                           * 빠진다(실측). */
 #endif
-/* HS2 = 모음 (U24 P1, 0-based 이므로 idx 1). tb_hallsensor.h의 P0..P4 매핑과 동일. */
+/* HS5 = 모음 (U24 P4, 0-based 이므로 idx 4). tb_hallsensor.h의 P0..P4 매핑과 동일.
+ * ★2026-08-25: 마개 라벨 순서 재정의로 모음이 HS2 -> HS5 로 옮겨졌다(동작과 맞교환).
+ *   배선은 그대로이고 라벨만 바뀐 것이라 이 인덱스와 mode_arbiter.c 디코드 표만
+ *   반대로 잡으면 된다. */
 #ifndef MOEUM_HS_START_IDX
-#define MOEUM_HS_START_IDX      1U
+#define MOEUM_HS_START_IDX      4U
 #endif
-/* 시작 트리거(HS2 상승에지)를 이 파일 안에서 볼지 여부.
+/* 시작 트리거(HS5 상승에지)를 이 파일 안에서 볼지 여부.
  *   0 = 기본. 중재자(mode_arbiter.c)가 HS1~5를 항상 디코딩해 모드 전환과
  *       Moeum_Start()를 담당한다. SenseTick가 모드 게이팅되어 있어 hs_prev가
  *       얼어붙던 문제(모드 진입 시 가짜 상승에지 / stale HIGH로 에지 누락)가
  *       구조적으로 사라진다. 마개 이탈 감시(lid_guard)도 중재자의 HS_LOST가
  *       담당하므로 함께 비활성.
- *   1 = 구(舊) 동작. 중재자를 쓰지 않고 이 시나리오가 직접 HS2를 볼 때만.
+ *   1 = 구(舊) 동작. 중재자를 쓰지 않고 이 시나리오가 직접 HS5를 볼 때만.
  * 어느 쪽이든 dbg_force_start(벤치 강제 시작)는 항상 유효하다. */
 #ifndef MOEUM_HS_TRIGGER_INTERNAL
 #define MOEUM_HS_TRIGGER_INTERNAL 0
@@ -131,7 +133,7 @@ extern "C" {
 #endif
 
 /* ---- 4.5 추가 투입 금지 / 비상 정지 (기획서 4.5, 동작·모음 공통) ------- *
- * 처리 중 투입구 마개가 모음 위치를 벗어나면(=시작 홀 HS2 이탈) 즉시 전 모터/밸브
+ * 처리 중 투입구 마개가 모음 위치를 벗어나면(=시작 홀 HS5 이탈) 즉시 전 모터/밸브
  * 정지 후 IDLE(모음은 히터 없어 식힘 불필요). 벤치 강제시작은 무장하지 않음. */
 #ifndef MOEUM_LID_OPEN_ABORT
 #define MOEUM_LID_OPEN_ABORT     1        /* 1=투입구 개방 비상정지 사용        */
@@ -168,9 +170,9 @@ typedef struct
 	uint32_t          state_since;   /* 현 상태 진입 tick                     */
 
 	volatile uint8_t  start_req;     /* SenseTick가 세팅, MotorTick가 소비    */
-	volatile uint8_t  dbg_force_start;/* 벤치 강제 시작: 1 세팅 -> HS2 없이 시작(SenseTick가 1회 소비 후 0). HS2 상승에지와 OR. */
+	volatile uint8_t  dbg_force_start;/* 벤치 강제 시작: 1 세팅 -> HS5 없이 시작(SenseTick가 1회 소비 후 0). HS5 상승에지와 OR. */
 	volatile uint8_t  water_reached; /* SenseTick가 세팅, FILL진입 시 클리어  */
-	uint8_t           hs_prev;       /* HS2 에지 검출용 이전값                */
+	uint8_t           hs_prev;       /* HS5 에지 검출용 이전값                */
 
 	/* 4.5 비상정지 */
 	volatile uint8_t  abort_req;     /* 정지 요청(SenseTick/RequestStop 세팅) */

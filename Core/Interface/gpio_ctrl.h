@@ -82,17 +82,18 @@ typedef enum
 /* ---- EXTI pins (exti_* nets, GPIO_MODE_IT_FALLING) ------------------- */
 typedef enum
 {
-	GPIO_EXTI_BIMETAL_80 = 0, /* PF0  - exti0_BIMETAL_80 (80C bimetal)   */
-	GPIO_EXTI_BIMETAL_60,     /* PF1  - exti1_BIMETAL_60 (60C bimetal)   */
+	GPIO_EXTI_BIMETAL_70 = 0, /* PF0  - exti0_BIMETAL_70 (70C, REV02: was 80C). ★극성(사용자 2026-09-22): 70℃ 초과 = K2 락 = **LOW** */
+	GPIO_EXTI_BIMETAL_50,     /* PF1  - exti1_BIMETAL_50 (50C, REV02: was 60C). ★극성(사용자 2026-09-22): 50℃ 초과 = K3 락 = **HIGH** */
 	GPIO_EXTI_THALL_CLOSE,    /* PF2  - exti2_THALL_CLOSE (R1: was BIMETAL3) */
 	GPIO_EXTI_WHALL_CLOSE,    /* PF3  - exti3_WHALL_CLOSE (R1: was BIMETAL4) */
 	GPIO_EXTI_WHALL_OPEN,     /* PF4  - exti4_WHALL_OPEN  (R1: was BIMETAL5) */
 	GPIO_EXTI_THALL_OPEN,     /* PF5  - exti5_THALL_OPEN  (R1: was LEAD_SW)  */
-	GPIO_EXTI_WATER_SEN1,     /* PF6  - exti6_WATER_SEN1     */
-	GPIO_EXTI_WATER_SEN2,     /* PF7  - exti7_WATER_SEN2     */
+	GPIO_EXTI_WATER_SEN1,     /* PF6  - exti6_WATER_SEN1 (REV02: 수위 단독 채널) */
+	GPIO_EXTI_NEW_HALL_INT,   /* PF7  - exti7_NEW_HALL_INT (REV02 J16 가이드 홀, was WATER_SEN2) */
 	GPIO_EXTI_TIMER_OUT,      /* PF8  - exti8_TIMER_OUT (R1: moved from PA11) */
 	GPIO_EXTI_HALL_INT1,      /* PF9  - exti9_HALL_INT1 (R1 new, TCA9554 INT, act.low) */
 	GPIO_EXTI_HALL_INT2,      /* PF10 - exti10_HALL_INT2 (R1 new, TCA9554 INT, act.low) */
+	GPIO_EXTI_HALL_INT3,      /* PF11 - exti11_HALL_INT3 (REV02 new, U32 INT, act.low) */
 	GPIO_EXTI_M2_FGOT,        /* PF12 - exti12_M2_FGOT       */
 	GPIO_EXTI_M2_nFAULT,      /* PF13 - exti13_M2_nFAULT     */
 	GPIO_EXTI_M1_nFAULT,      /* PF14 - exti14_M1_nFAULT     */

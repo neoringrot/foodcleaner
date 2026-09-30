@@ -26,9 +26,16 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "tb_drv8871.h"
+#include "guide_edge.h"   /* 가이드(HS6) 엣지 카운터 - MotorTask 1ms 서비스 */
+#include "tb_rinse.h"     /* 5단계 벤치: 엣지 계수 실측(I02) */
+#include "tb_rotation.h"  /* 5단계 벤치: R3 개정4 회전수 엔진(rotation.c) 자가시험 + run F */
+#if ENABLE_TESTBENCH_APP
+#include "tb_app.h"       /* 벤치 원격검증 어댑터(R0 0x27/0x33) - main.h 스위치 */
+#endif
 #include "tb_stepmotor.h"
 #include "drv8306.h"
 #include "bldc_ctrl.h"
+#include "keypad.h"
 #include "tb_tca9554.h"
 #include "tb_lift.h"
 #include "tb_gpioout.h"
@@ -41,6 +48,9 @@
 #include "tb_thermistor.h"
 #include "tb_heat.h"
 #include "tb_speaker.h"
+#include "tb_voice.h"
+#include "voiceupdater.h"
+#include "voice.h"
 #include "tb_water.h"
 #include "tb_doorhall.h"
 #include "moeum.h"
@@ -101,6 +111,17 @@ volatile uint8_t  g_hall_mask     = 0;   /* HS1..8 detected mask [bit0..7] */
 /* Motor control service thread. Owns all motor testbeds -- DRV8871 doors (U5/
  * U7), steppers STEP1/STEP2, DRV8306 BLDC (U11/U16) and the U6 lift -- so motor
  * timing stays independent of the 100 ms sensor loop in defaultTask. */
+/* 음성 재생 태스크. DAC DMA 의 HT/TC 인터럽트가 세마포어를 주면 다음 반쪽
+ * (1024샘플/64ms)을 SPI 로 읽어 채운다. 채우는 일 자체는 2KB @16MHz ≈ 1.1ms
+ * 라 64ms 예산에 비해 한가하다. 시나리오/모터와 독립이라 재생이 MotorTick 에
+ * 영향을 주지 않는다(설계서 §7.3 비블로킹 요구). */
+osThreadId_t Voice_TaskHandle;
+const osThreadAttr_t Voice_Task_attributes = {
+  .name = "Voice_Task",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+
 osThreadId_t Motor_TaskHandle;
 const osThreadAttr_t Motor_Task_attributes = {
   .name = "Motor_Task",
@@ -165,6 +186,7 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_THREADS */
   Motor_TaskHandle = osThreadNew(StartMotorTask, NULL, &Motor_Task_attributes);
+  Voice_TaskHandle = osThreadNew(Voice_Task, NULL, &Voice_Task_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -205,9 +227,22 @@ void StartDefaultTask(void *argument)
    * also polls periodically as a safety net. */
   HallSensor_Init();
   TB_HallSensor_Init();   /* enable-gated U24 Hall-sensor monitor (defaultTask owns the HS reads) */
+  /* 가이드(교반 원점 HS6 = U24 P5 = J28-2) 엣지 카운터. R3 5단계의 cnt 20/40 이
+   * 이 위에 얹힌다(설계서 공통헹굼_모듈_구조R3.md §4). 서비스는 StartMotorTask
+   * (1ms)가 한다 - 100ms 폴링으로는 C007 의 감지~정지 ≤50ms 를 못 맞춘다.
+   * 여기서는 카운터만 0 으로 세운다(HallSensor_Init 뒤라야 캐시가 유효). */
+  GuideEdge_Init();
   /* U15 LM4871 speaker (SPK-EN PA3, SPK-DAC PA4). Enable-gated low-volume test
    * tone; no ADC1/I2C involvement so it is safe on this task. Idempotent init. */
   TB_Speaker_Init();      /* enable-gated speaker test tone (set tb_speaker_enable=1) */
+  /* U21 음성 플래시(W25Q128) 벤치 - tb_speaker 와 대상이 다르다: 저쪽은 앰프/DAC
+   * 출력단, 이쪽은 SPI1 위의 플래시 내용물. one-shot 커맨드 방식이라 평소에는
+   * 아무것도 하지 않는다. 드라이버가 블로킹(섹터 이레이즈 최대 400ms)이라
+   * 1ms MotorTask 가 아니라 반드시 이 100ms 태스크에 있어야 한다. */
+  TB_Voice_Init();        /* one-shot: tb_voice_probe_once / _selftest_once 등 */
+  /* 음성 이미지 다운로드 로더(1회성 정비 기능). 평소에는 완전히 비활성이고,
+   * 앱/PC 가 R0 W|0x32 를 보냈을 때만 UART5 소유권을 가져간다. */
+  VoiceUpdater_Init();
   /* Clean-water fill path: WATER-ON supply (PE2) + WATER-SEN1/SEN2 level sensors
    * (PF6/PF7 EXTI). Enable-gated; plain GPIO + EXTI-flag reads, so it is safe on
    * this task, which already polls the EXTI flags. */
@@ -278,6 +313,12 @@ void StartDefaultTask(void *argument)
      * mute. A burst blocks this task for tb_speaker_on_ms; harmless at 100 ms. */
     TB_Speaker_Poll();
 
+    /* U21 음성 플래시 벤치. 대기 중인 one-shot 커맨드가 없으면 즉시 반환한다.
+     * 인자는 소거/기록 커맨드에만 걸리는 게이트다 - 읽기 커맨드는 SPI1 에 U21
+     * 뿐이라 시나리오와 다툴 상대가 없어 모드와 무관하게 돈다(tb_voice.h).
+     * 자가검사 1회는 이 태스크를 ~0.9초 묶으므로 벤치 모드에서만 허용된다. */
+    TB_Voice_Poll(AppMode_IsBenchIdle(g_app_mode));
+
     /* Enable-gated water testbed: set tb_water_enable=1 in the debugger to open
      * WATER-ON and refresh tb_water_sen1/2_level/_present/_events, 0 to shut the
      * supply off. Reads the shared EXTI flags polled/cleared on this task.
@@ -325,6 +366,12 @@ void StartDefaultTask(void *argument)
      * of driving anything here. */
     Proto_Tick(HAL_GetTick());
 
+    /* 음성 다운로드 모드면 여기서 세션 전체를 처리하고 돌아온다(수 분).
+     * 그 동안 이 태스크의 센서 폴링은 멈추지만, 내부 대기가 osDelay(1)
+     * 양보라 MotorTask(1ms)는 정상 동작한다. 비활성이면 즉시 반환하므로
+     * 평상시 비용은 함수 호출 하나다(voiceupdater.h "태스크 영향"). */
+    VoiceUpdater_Poll();
+
     /* Enable-gated R0 protocol self-test: set tb_proto_run_once=1 (single pass)
      * or tb_proto_enable=1 (repeating) in the debugger, then read tb_proto_fails
      * / tb_proto_first_fail. ~1-2 ms per pass; uses only its own buffers, so it
@@ -356,7 +403,11 @@ void StartDefaultTask(void *argument)
   *                                                keypad (odd SW=M1, even SW=M2)
   *                                                or set g_*_ctrl.target_out_rpm;
   *                                                status in .meas_out_rpm/.state
-  *           tb_lift_enable                    -> U6 lift (dir: tb_lift_reverse)
+  *           tb_lift_enable                    -> U6 lift (dir: tb_lift_reverse).
+  *                                TIM4 HW PWM since R1; a profiled run is a
+  *                                one-shot that self-clears the flag at its
+  *                                time cap, or at HS8 (lift bottom) when
+  *                                descending -- there is NO top limit sensor
   *         Poll all at 1 ms so the stepper pacing (tb_stepN_period_ms) is
   *         accurate; the DRV8306 testbed self-times its FGOUT window off
   *         HAL_GetTick().
@@ -379,6 +430,14 @@ static void MotorTask_RunTestbench(uint32_t now_ms)
   {
     TB_TCA9554_Poll();
   }
+  else
+  {
+    Keypad_FlushEvents();   /* 제동 구간에 눌린 키는 버린다(재기동 금지) */
+  }
+  /* 5단계 벤치: 가이드 엣지 계수 실측 + 원샷 교반 구동(I02 확정용). BldcCtrl_Tick
+   * 앞에 둬서 이 사이클의 Start/Stop 이 같은 사이클에 적용되게 한다. */
+  TB_Rinse_Poll(AppMode_IsBenchIdle(g_app_mode));
+  TB_Rotation_Poll(AppMode_IsBenchIdle(g_app_mode)); /* tb_rinse 와 교반 배타 */
   BldcCtrl_Tick(&g_grind_ctrl, now_ms);   /* M1 closed-loop PI (100 ms)        */
   BldcCtrl_Tick(&g_stir_ctrl,  now_ms);   /* M2 closed-loop PI (100 ms)        */
   TB_Lift_Poll();
@@ -427,9 +486,15 @@ void StartMotorTask(void *argument)
   DRV8306_InitAll();               /* bring up drv8306_m1 + drv8306_m2         */
   BldcCtrl_Init(&g_grind_ctrl);    /* M1 (U11) grinder closed loop            */
   BldcCtrl_Init(&g_stir_ctrl);     /* M2 (U16) stirrer closed loop            */
-  TB_TCA9554_Init();               /* keypad(U9); after the controllers above */
+  Keypad_Init();                   /* U31 버튼8 / U32 LED8 - 버스 단독 소유자  */
+  TB_TCA9554_Init();               /* 키패드 -> BLDC 벤치 매핑(keypad 소비자)  */
   TB_Lift_Init();
   TB_GpioOut_Init();               /* drain valve + 3 fans, all forced off     */
+  TB_Rinse_Init();                 /* 5단계 벤치: 가이드 엣지 계수 실측(I02)   */
+  TB_Rotation_Init();              /* 5단계 벤치: 회전수 엔진(개정4)           */
+#if ENABLE_TESTBENCH_APP
+  TbApp_Init();                    /* 벤치 원격검증 어댑터(0x27/0x33)          */
+#endif
   Moeum_Init();                    /* scenario armed but idle until selected   */
   Dongjak_Init();                  /* scenario armed but idle until selected   */
   Kangeum_Init();                  /* HS1 강음 - unimplemented stub            */
@@ -440,6 +505,18 @@ void StartMotorTask(void *argument)
   for(;;)
   {
     uint32_t now = HAL_GetTick();
+
+    /* 전면 버튼 8개(U31) + LED 8개(U32). 모드와 무관하게 매 사이클 돈다 -
+     * 버튼은 시나리오 실행 중에도 눌리고, 이 드라이버가 U31/U32 의 유일한
+     * 버스 소유자다. 눌림 이벤트는 래치되므로 아래 소비자들이 같은 사이클에
+     * 가져가면 된다(현재 소비자는 벤치뿐 - 제품 기능 배정 I10·I14 미확정). */
+    Keypad_Tick(now);
+
+    /* 가이드(HS6) 엣지 계수. **모드와 무관하게 매 사이클** 돈다 - 5단계 헹굼이
+     * 이 카운터를 그대로 쓰고, 준비 탐색/회차는 baseline 차이로 읽기 때문에
+     * 시나리오 중에도 끊기면 안 된다. PF9(HALL-INT1) 플래그가 섰을 때만 U24 를
+     * 읽으므로 평상시 I2C 부하는 없다(guide_edge.h 참조). */
+    GuideEdge_Tick(now);
 
     /* Common stop handler. Consumes any pending stop request (HS3 정지, lid
      * lost, mode switch, scenario fault, debugger), releases the BLDC short

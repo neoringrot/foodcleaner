@@ -10,16 +10,18 @@ extern "C" {
 
 /* -------------------------------------------------------------------------
  * tb_water - testbed for the clean-water fill path: the WATER-ON supply
- * output plus the two water-level sensors WATER-SEN1 / WATER-SEN2.
+ * output plus the water-level sensor WATER-SEN1.
  *
  *   o_WATER_ON      (PE2) : water supply valve/pump enable (output, act.high)
  *   exti6_WATER_SEN1(PF6) : water-level sensor 1 (EXTI, falling edge)
- *   exti7_WATER_SEN2(PF7) : water-level sensor 2 (EXTI, falling edge)
+ *
+ * ★REV02: PF7 은 수위센서2가 아니라 J16 가이드 홀(exti7_NEW_HALL_INT)로 재배정됐다.
+ *   수위는 SEN1 단독이고, SEN2 관련 watch 변수는 이 벤치에서 제거했다.
  *
  * Flow (matches the requested behaviour):
  *   if (tb_water_enable) {
  *       drive WATER-ON high;                 // open the supply
- *       recognise WATER-SEN1 / WATER-SEN2;   // levels + present + edge counts
+ *       recognise WATER-SEN1;                // level + present + edge count
  *   } else {
  *       drive WATER-ON low;                  // supply off, safe
  *   }
@@ -61,14 +63,11 @@ extern volatile uint8_t tb_water_enable;      /* 1 = supply on + monitor, 0 = of
 extern volatile uint8_t tb_water_on_state;    /* WATER-ON output latch read-back 0/1 */
 
 extern volatile uint8_t tb_water_sen1_level;  /* WATER-SEN1 raw pin level 0/1        */
-extern volatile uint8_t tb_water_sen2_level;  /* WATER-SEN2 raw pin level 0/1        */
 
 extern volatile uint8_t tb_water_sen1_present;/* 1 = water reached SEN1 (polarity applied) */
-extern volatile uint8_t tb_water_sen2_present;/* 1 = water reached SEN2 (polarity applied) */
-extern volatile uint8_t tb_water_present;     /* 1 = either sensor reports water     */
+extern volatile uint8_t tb_water_present;     /* 1 = the sensor reports water        */
 
 extern volatile uint32_t tb_water_sen1_events;/* WATER-SEN1 falling-edge count       */
-extern volatile uint32_t tb_water_sen2_events;/* WATER-SEN2 falling-edge count       */
 
 extern volatile uint32_t tb_water_samples;    /* poll count while enabled            */
 

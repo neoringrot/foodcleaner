@@ -105,19 +105,56 @@ extern "C" {
 #define DRV8306_FG_EDGES_PER_ELEC_REV 3U      /* falling edges per elec. rev  */
 #define DRV8306_DEFAULT_POLE_PAIRS    4U      /* 8 poles / 2 (datasheet)      */
 
-/* ---- Per-instance mechanics (gearbox + no-load speed) ------------------- *
+/* ---- Per-instance mechanics (gearbox + final stage + no-load speed) ------ *
  * The two motors are NOT the same part, so these live per-instance (handle
  * fields) instead of as shared #defines:
  *   M1 (U11, grinder) : direct drive, JK60BLS03 nameplate (4000 RPM no-load).
- *   M2 (U16, stirrer) : JK42BLS02-39JXE49 (datasheet/JK42BLS02-...-41.8W.pdf),
- *                       5000 RPM no-load motor behind a 1:49 planetary gearbox
- *                       (rated 4.4 N-m / 65 RPM at the OUTPUT shaft).
- * gear_ratio lets the closed-loop stirrer control (stir_ctrl.c) command the
- * OUTPUT shaft in RPM while FGOUT still measures the motor shaft; noload_rpm
- * anchors the open-loop feed-forward (DRV8306_FeedForwardPerMille). */
+ *   M2 (U16, stirrer) : JK42BLS02 8-pole, 5000 RPM no-load, **1:82 gearbox**
+ *                       -> **x1.2 step-up gear** -> stirrer blade (HS6 guide).
+ *
+ * ★2026-09-21 (구현현황 §0.22, 기록지 I02_엣지실측_기록R3.md §11.7~§11.11) —
+ *   사용자 지시: "gear_ratio 82로 바꾸고 날개 기준으로 맞춰줘".
+ *   - 실측(run G): 날개(가이드) 1회전당 M2 FG 822.2개 = 모터 68.52회전
+ *     (FG 12개/모터회전 = 3 x 4극쌍). 정/역·15~40rpm 에서 ±0.08%.
+ *   - 업체: 모터 사양 출력 39 rpm, 마지막 기어 x1.2 증속. 68.52 x 1.2 = 82.2 =
+ *     감속기, 82.2 x 39 = 3207 ~= JK42BLS02 정격 3200 rpm -> 서로 일치.
+ *   - 그래서 R2 의 1:49 는 틀렸다. datasheet/ 의 `-39JXE49` 파일(1:49, 65 rpm)은
+ *     **설치된 모터와 다른 감속기 사양**이다. 1:49 로 계산하던 "출력 rpm" 은
+ *     감속기 출력을 1.67배, 날개를 1.43배 크게 보고 있었다(지령 30 -> 날개 20).
+ *
+ * "OUTPUT" = **날개(blade)** 다 (M2). 환산은 두 단을 모두 거친다:
+ *     out_rpm = motor_rpm x stage_num / (gear_ratio x stage_den)
+ *     M2 : motor / 82 x 6/5 = motor / 68.33   (실측 68.52 과 0.28% 차 - 허용)
+ *   gear_ratio 는 uint16 이라 1.2 를 담을 수 없어 증속 단을 num/den 으로 분리했다.
+ *   M1 은 1/1 (직결, 변화 없음).
+ * noload_rpm anchors the open-loop feed-forward (DRV8306_FeedForwardPerMille). */
 #define DRV8306_M1_GEAR_RATIO         1U      /* direct drive (no gearbox)    */
-#define DRV8306_M2_GEAR_RATIO         49U     /* 1:49 planetary reduction     */
+#define DRV8306_M1_STAGE_NUM          1U      /* no final stage               */
+#define DRV8306_M1_STAGE_DEN          1U
+/* ★2026-09-21 §0.22: 49 -> 82. 실측 68.52 x 업체 증속 1.2 = 82.2 (정격 3200/39 = 82.05). */
+#define DRV8306_M2_GEAR_RATIO         82U     /* 1:82 planetary reduction     */
+/* ★2026-09-21 §0.22 신설: 감속기 출력 -> 날개 x1.2 증속 (업체 회신). 6/5 = 1.2 */
+#define DRV8306_M2_STAGE_NUM          6U      /* blade = gearbox_out x 6/5    */
+#define DRV8306_M2_STAGE_DEN          5U
 #define DRV8306_M2_NOLOAD_RPM         5000U   /* JK42BLS02 no-load at 24 V    */
+
+/* ---- Feed-forward offset (static friction / no-load current) ------------- *
+ * ★2026-09-21 (구현현황 §0.22.5) — 사용자 지시 "(가) 피드포워드 오프셋 추가해줘".
+ * 피드포워드 duty = motor_rpm / noload_rpm 은 **0 rpm 에서 0‰** 인 직선이다. 실제 모터는
+ * 마찰·무부하 전류 때문에 돌기 시작하는 데 일정 duty 가 더 든다. §0.22 벤치(무부하,
+ * 기록지 §11.14)에서 지령 20/30/40 모두 날개가 **≈2 rpm 일정하게 모자랐다**(90/93/95%) —
+ * 속도에 비례하지 않으므로 PI 비례오차가 아니라 이 상수 누락이다.
+ * 값: 정상상태에서 PI 의 P항(kp 5 × 오차 ≈2)이 이미 ≈10‰ 를 보태고 있으므로,
+ *     필요한 상수 = FF 기울기분(13.67‰/rpm × ≈2.1 ≈ 28) + P분(≈10) = **36~40‰**
+ *     (지령 20: 36.0 / 30: 39.6 / 40: 40.1). 가운데 값 38.
+ * 목표 0 rpm(정지·램프 시작점)에서는 0 을 그대로 준다 — 소프트스타트 유지.
+ * M1(분쇄)은 측정 근거가 없어 0(변화 없음). */
+#ifndef DRV8306_M1_FF_OFFSET_PM
+#define DRV8306_M1_FF_OFFSET_PM       0U      /* grinder: unchanged           */
+#endif
+#ifndef DRV8306_M2_FF_OFFSET_PM
+#define DRV8306_M2_FF_OFFSET_PM       38U     /* stirrer: §0.22.5 bench 36~40 */
+#endif
 
 typedef enum
 {
@@ -147,8 +184,11 @@ typedef struct
 
 	/* Motor parameter */
 	uint16_t           pole_pairs;  /* for FGOUT -> RPM conversion           */
-	uint16_t           gear_ratio;  /* output-shaft reduction (1 = direct)   */
+	uint16_t           gear_ratio;  /* gearbox reduction (1 = direct)        */
+	uint16_t           stage_num;   /* final stage: out = gearbox_out x num/den */
+	uint16_t           stage_den;   /*   (M2 6/5 = x1.2 step-up to blade)     */
 	uint16_t           noload_rpm;  /* motor no-load RPM at 100 % duty / VM  */
+	uint16_t           ff_offset_pm;/* FF constant added when out_rpm > 0 [‰] */
 
 	/* State (filled/maintained by the driver) */
 	uint32_t           arr;         /* PWM auto-reload (from Init)           */
@@ -227,14 +267,18 @@ int16_t  DRV8306_PI_Compute(DRV8306_PI_t *pi, int32_t err,
 /* Set duty in per-mille (0..1000). Exact; the closed-loop path uses this. */
 void     DRV8306_SetDutyPerMille(DRV8306_HandleTypeDef *h, uint16_t duty_pm);
 
-/* Open-loop feed-forward: duty [per-mille] to spin the OUTPUT shaft at out_rpm,
- * from the no-load relation (motor_rpm = out_rpm*gear_ratio; duty = motor_rpm /
- * noload_rpm). Used as the PI baseline so the integrator only trims the error. */
+/* Open-loop feed-forward: duty [per-mille] to spin the OUTPUT (M2: blade) at
+ * out_rpm, from the no-load relation
+ *   motor_rpm = out_rpm x gear_ratio x stage_den / stage_num ;
+ *   duty = motor_rpm / noload_rpm + ff_offset_pm   (out_rpm == 0 -> 0)
+ * Used as the PI baseline so the integrator only trims the error. */
 int16_t  DRV8306_FeedForwardPerMille(const DRV8306_HandleTypeDef *h,
                                      uint16_t out_rpm);
 
-/* Measured OUTPUT-shaft RPM = DRV8306_MeasuredRPM()/gear_ratio. Advances the
- * FGOUT window exactly like DRV8306_MeasuredRPM(), so call it once per window. */
+/* Measured OUTPUT RPM (M2: blade) =
+ *   DRV8306_MeasuredRPM() x stage_num / (gear_ratio x stage_den).
+ * Advances the FGOUT window exactly like DRV8306_MeasuredRPM(), so call it once
+ * per window. */
 uint16_t DRV8306_MeasuredOutputRPM(DRV8306_HandleTypeDef *h, uint32_t window_ms);
 
 /* Fault helpers. IsFault reads the latched flag; ClearFault pulses the device

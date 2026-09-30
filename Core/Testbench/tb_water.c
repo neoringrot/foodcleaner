@@ -2,12 +2,12 @@
 
 #include "gpio_ctrl.h"
 
-/* Testbed for the clean-water fill path (WATER-ON supply + WATER-SEN1/SEN2
- * level sensors). See tb_water.h for the pin map, polarity note and the
+/* Testbed for the clean-water fill path (WATER-ON supply + the WATER-SEN1
+ * level sensor). See tb_water.h for the pin map, polarity note and the
  * single-owner (StartDefaultTask) constraint.
  *
  * Poll() mirrors tb_water_enable onto WATER-ON: enabled -> supply on and the
- * two sensors are decoded (raw level, polarity-applied "present", and a
+ * sensor is decoded (raw level, polarity-applied "present", and a
  * falling-edge count taken from the shared gpio_ctrl EXTI flags); disabled ->
  * supply forced off and the last snapshot is left untouched for inspection. */
 
@@ -18,14 +18,11 @@ volatile uint8_t tb_water_enable = 0;
 volatile uint8_t tb_water_on_state = 0;
 
 volatile uint8_t tb_water_sen1_level = 0;
-volatile uint8_t tb_water_sen2_level = 0;
 
 volatile uint8_t tb_water_sen1_present = 0;
-volatile uint8_t tb_water_sen2_present = 0;
 volatile uint8_t tb_water_present      = 0;
 
 volatile uint32_t tb_water_sen1_events = 0;
-volatile uint32_t tb_water_sen2_events = 0;
 
 volatile uint32_t tb_water_samples = 0;
 
@@ -50,14 +47,11 @@ void TB_Water_Init(void)
 	tb_water_on_state = 0;
 
 	tb_water_sen1_level = 0;
-	tb_water_sen2_level = 0;
 
 	tb_water_sen1_present = 0;
-	tb_water_sen2_present = 0;
 	tb_water_present      = 0;
 
 	tb_water_sen1_events = 0;
-	tb_water_sen2_events = 0;
 
 	tb_water_samples = 0;
 
@@ -70,7 +64,6 @@ void TB_Water_Init(void)
 void TB_Water_Poll(uint8_t tb_active)
 {
 	uint8_t l1;
-	uint8_t l2;
 
 	/* ★소유권 게이트(tb_heat 의 HT-POWER 와 같은 문제·같은 해법).
 	 * WATER-ON(PE2)은 모음/동작 시나리오도 쓰는 핀이다. 시나리오는 MotorTask 에서
@@ -101,7 +94,6 @@ void TB_Water_Poll(uint8_t tb_active)
 	if (!s_armed)
 	{
 		gpio_ctrl_exti_flag_clear(GPIO_EXTI_WATER_SEN1);
-		gpio_ctrl_exti_flag_clear(GPIO_EXTI_WATER_SEN2);
 		s_armed = 1;
 	}
 
@@ -109,16 +101,13 @@ void TB_Water_Poll(uint8_t tb_active)
 	gpio_ctrl_on(GPIO_OUT_WATER_ON);
 	tb_water_on_state = gpio_ctrl_is_on(GPIO_OUT_WATER_ON);
 
-	/* 2) Recognise the two level sensors: raw level + polarity-applied present. */
+	/* 2) Recognise the level sensor: raw level + polarity-applied present. */
 	l1 = gpio_ctrl_exti_read(GPIO_EXTI_WATER_SEN1);
-	l2 = gpio_ctrl_exti_read(GPIO_EXTI_WATER_SEN2);
 
 	tb_water_sen1_level = l1;
-	tb_water_sen2_level = l2;
 
 	tb_water_sen1_present = level_to_present(l1);
-	tb_water_sen2_present = level_to_present(l2);
-	tb_water_present = (uint8_t)(tb_water_sen1_present || tb_water_sen2_present);
+	tb_water_present = tb_water_sen1_present;
 
 	/* 3) Count falling edges latched by the EXTI ISR, then clear each flag so
 	 * the next edge is counted exactly once. */
@@ -126,11 +115,6 @@ void TB_Water_Poll(uint8_t tb_active)
 	{
 		tb_water_sen1_events++;
 		gpio_ctrl_exti_flag_clear(GPIO_EXTI_WATER_SEN1);
-	}
-	if (gpio_ctrl_exti_flag_get(GPIO_EXTI_WATER_SEN2))
-	{
-		tb_water_sen2_events++;
-		gpio_ctrl_exti_flag_clear(GPIO_EXTI_WATER_SEN2);
 	}
 
 	tb_water_samples++;

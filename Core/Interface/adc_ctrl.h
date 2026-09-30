@@ -38,6 +38,7 @@ typedef enum
 	ADC_CH_DC_CURR1 = ADC_CHANNEL_15,   /* PC5  DC-ADC1 (R1) */
 	ADC_CH_DC_CURR2 = ADC_CHANNEL_8,    /* PB0  DC-ADC2 (R1) */
 	ADC_CH_DC_CURR3 = ADC_CHANNEL_9,    /* PB1  DC-ADC3 (R1) */
+	ADC_CH_WEIGHT   = ADC_CHANNEL_13,   /* PC3  weight-ADC (REV02 J40 → R178/C128 → R174, C078·§0.37) */
 } AdcCtrl_Channel_t;
 
 #define ADC_CTRL_ADC_MAX   4095u        /* 12-bit ADC full scale             */

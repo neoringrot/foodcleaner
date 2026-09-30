@@ -13,6 +13,7 @@
 
 #include "protocol_r0.h"
 #include "uart_ctrl.h"
+#include "voiceupdater.h"
 
 #include "mode_arbiter.h"
 #include "moeum.h"
@@ -24,6 +25,9 @@
 #include "wdoor.h"
 #include "tdoor.h"
 #include "lift_motor.h"
+#if ENABLE_TESTBENCH_APP
+#include "tb_app.h"        /* 테스트벤치 원격검증 어댑터 (0x27 / 0x33) */
+#endif
 
 #include <string.h>
 
@@ -329,6 +333,18 @@ static uint8_t scn_err(void)
 	return 0U;
 }
 
+/* STATUS 바이트 12. ★2026-09-22 앱 동기화 — 종전엔 동작 모드일 때만 실어 모음 에러(E01·E04·E09)가
+ * 앱에 "사유 코드 없음"으로 보였고, 래치형 에러가 남은 채 모드가 바뀌면(정지 → 대기) 새 시작이 막혀
+ * 있는데도 0 이 나갔다. 현재 모드의 코드를 싣고, 모드 밖이면 래치형이 남은 쪽을 싣는다. */
+static uint8_t scn_err_code(void)
+{
+	if (g_app_mode == APP_MODE_MOEUM)   { return g_moeum.err_code; }
+	if (g_app_mode == APP_MODE_DONGJAK) { return g_dongjak.err_code; }
+	if (Dongjak_IsLatched() != 0U)      { return g_dongjak.err_code; }
+	if (Moeum_IsLatched() != 0U)        { return g_moeum.err_code; }
+	return 0U;
+}
+
 /* g_proto.run_start(busy 0->1) 기준 경과 초. 미동작이면 0.
  * 모음에는 dongjak.scn_start 같은 시작 tick 이 없어 프로토콜이 자체로 잡는다. */
 static uint16_t run_seconds(uint32_t now_ms)
@@ -385,13 +401,21 @@ static uint16_t build_status(uint8_t *b, uint32_t now_ms)
 	put_i16(b,  8, temp_or_zero(g_therm_c_d10[2]));
 	put_u8 (b, 10, g_bin_fill_pct);
 	put_u8 (b, 11, g_hall_mask);
-	put_u8 (b, 12, (g_app_mode == APP_MODE_DONGJAK) ? g_dongjak.err_code : 0U);
+	put_u8 (b, 12, scn_err_code());
 	put_u8 (b, 13, g_jungji.last_src);
 	put_u16(b, 14, g_jungji.stop_count);
 	put_u8 (b, 16, g_proto.mon_seq);
 	put_u8 (b, 17, 0U);
 	put_u16(b, 18, (uint16_t)(((now_ms / 1000UL) > 65535UL) ? 65535UL : (now_ms / 1000UL)));
 	return PROTO_LEN_STATUS;
+}
+
+/* ms → 0.1 s, u16 포화. 0 은 '미도달' 그대로 둔다. */
+static uint16_t ds16(uint32_t ms)
+{
+	uint32_t d = ms / 100UL;
+	if ((ms != 0UL) && (d == 0UL)) { d = 1UL; }
+	return (uint16_t)((d > 0xFFFFUL) ? 0xFFFFUL : d);
 }
 
 static uint16_t build_moeum(uint8_t *b, uint32_t now_ms)
@@ -405,6 +429,8 @@ static uint16_t build_moeum(uint8_t *b, uint32_t now_ms)
 	if (g_moeum.abort_req)     flags |= PROTO_MO_ABORT_REQ;
 	if (g_moeum.lid_guard)     flags |= PROTO_MO_LID_GUARD;
 	if (g_moeum.stir_active)   flags |= PROTO_MO_STIR_ACTIVE;
+	if (g_moeum.door_close_by == (uint8_t)MOEUM_DOOR_BY_TIMEOUT) flags |= PROTO_MO_WCLOSE_TMO;
+	if (g_moeum.door_open_by  == (uint8_t)MOEUM_DOOR_BY_TIMEOUT) flags |= PROTO_MO_WOPEN_TMO;
 
 	if (gpio_ctrl_is_on(GPIO_OUT_VALVE_DRY_IN))    io |= PROTO_MO_IO_VALVE_IN;
 	if (gpio_ctrl_is_on(GPIO_OUT_WATER_ON))        io |= PROTO_MO_IO_WATER_ON;
@@ -419,9 +445,16 @@ static uint16_t build_moeum(uint8_t *b, uint32_t now_ms)
 	put_u8 (b,  3, io);
 	put_u32(b,  4, now_ms - g_moeum.state_since);
 	put_u16(b,  8, g_moeum.stir_cycles);
-	put_u16(b, 10, (uint16_t)MOEUM_STIR_CYCLES);
+	put_u16(b, 10, (uint16_t)ROT_WASH_DRAIN_LEGS); /* ★개정4 ④: 프로파일당 운전 수(10). 옛 MOEUM_STIR_CYCLES */
 	put_u16(b, 12, g_stir_ctrl.meas_out_rpm);
 	put_u16(b, 14, run_seconds(now_ms));
+	/* ★2026-09-22 가이드 cnt 20/40 (rinse_lock). 회차가 끝나도 다음 회차 WASH 진입 전까지
+	 * 마지막 값이 남는다(40 = 완료 확인용). 단계는 rinse_step 으로 가른다. */
+	put_u16(b, 16, g_moeum.rinse.lock.cnt);
+	put_u8 (b, 18, g_moeum.rinse.lock.fault);
+	put_u8 (b, 19, g_moeum.rinse.step);
+	put_u16(b, 20, ds16(g_moeum.rinse.lock.t20_ms));
+	put_u16(b, 22, ds16(g_moeum.rinse.lock.t40_ms));
 	return PROTO_LEN_MOEUM;
 }
 
@@ -466,6 +499,11 @@ static uint16_t build_dongjak(uint8_t *b, uint32_t now_ms)
 	put_u8 (b, 24, g_dongjak.bin_fill_pct);
 	put_u8 (b, 25, io);
 	put_u16(b, 26, g_dongjak.cycle_count);
+	/* ★2026-09-22 앱 동기화 추가(28→36): 공정 시계 + 헹굼·자가세척 진행 */
+	put_u32(b, 28, (Dongjak_IsBusy() && g_dongjak.heater_started) ? (now_ms - g_dongjak.heater_since) : 0UL);
+	put_u8 (b, 32, g_dongjak.rinse.step);
+	put_u8 (b, 33, g_dongjak.rinse.lock.fault);
+	put_u16(b, 34, g_dongjak.rinse.lock.cnt);
 	return PROTO_LEN_DONGJAK;
 }
 
@@ -474,14 +512,14 @@ static uint16_t build_sensor(uint8_t *b)
 	uint8_t d1 = 0, d2 = 0, lim = 0, tv = 0;
 
 	/* PF0~PF7 */
-	if (gpio_ctrl_exti_read(GPIO_EXTI_BIMETAL_80))  d1 |= PROTO_SEN1_BIMETAL_80;
-	if (gpio_ctrl_exti_read(GPIO_EXTI_BIMETAL_60))  d1 |= PROTO_SEN1_BIMETAL_60;
+	if (gpio_ctrl_exti_read(GPIO_EXTI_BIMETAL_70))  d1 |= PROTO_SEN1_BIMETAL_70;
+	if (gpio_ctrl_exti_read(GPIO_EXTI_BIMETAL_50))  d1 |= PROTO_SEN1_BIMETAL_50;
 	if (gpio_ctrl_exti_read(GPIO_EXTI_THALL_CLOSE)) d1 |= PROTO_SEN1_THALL_CLOSE;
 	if (gpio_ctrl_exti_read(GPIO_EXTI_WHALL_CLOSE)) d1 |= PROTO_SEN1_WHALL_CLOSE;
 	if (gpio_ctrl_exti_read(GPIO_EXTI_WHALL_OPEN))  d1 |= PROTO_SEN1_WHALL_OPEN;
 	if (gpio_ctrl_exti_read(GPIO_EXTI_THALL_OPEN))  d1 |= PROTO_SEN1_THALL_OPEN;
 	if (gpio_ctrl_exti_read(GPIO_EXTI_WATER_SEN1))  d1 |= PROTO_SEN1_WATER_SEN1;
-	if (gpio_ctrl_exti_read(GPIO_EXTI_WATER_SEN2))  d1 |= PROTO_SEN1_WATER_SEN2;
+	if (gpio_ctrl_exti_read(GPIO_EXTI_NEW_HALL_INT))d1 |= PROTO_SEN1_NEW_HALL_INT;
 	/* PF8~PF15 + BLE 상태 */
 	if (gpio_ctrl_exti_read(GPIO_EXTI_TIMER_OUT))   d2 |= PROTO_SEN2_TIMER_OUT;
 	if (gpio_ctrl_exti_read(GPIO_EXTI_HALL_INT1))   d2 |= PROTO_SEN2_HALL_INT1;
@@ -552,12 +590,13 @@ static void stir_pattern(MotorPattern *p)
 	{
 		if (!g_moeum.stir_active)
 			return;
-		/* 모음: CW 6s / 정지 1s / CCW 6s = 1cycle 13s (moeum.h) */
-		p->pattern = PROTO_PAT_TRI;
+		/* ★2026-09-22 앱 동기화: 모음 교반 = 회전수 운전(WASH/DRAIN, 2회전 + 정지 2 s). phase 는
+		 * MoeumStirPhase 미러(0 역 / 1 정지 / 2 정), rep = 현 프로파일 운전 수. */
+		p->pattern = PROTO_PAT_ROT;
 		p->phase   = g_moeum.stir_phase;
 		p->rep     = (uint8_t)(g_moeum.stir_cycles & 0xFFU);
-		p->on_ms   = (uint16_t)MOEUM_STIR_CCW_MS;
-		p->off_ms  = (uint16_t)MOEUM_STIR_DELAY_MS;
+		p->on_ms   = 0U;
+		p->off_ms  = 2000U;                        /* P53 rotation_stop_ms */
 		p->since   = g_moeum.stir_phase_since;
 		return;
 	}
@@ -569,23 +608,38 @@ static void stir_pattern(MotorPattern *p)
 
 	switch (g_dongjak.state)
 	{
-	/* 헹굼 교반 = 3구간 패턴이되 식힘/배출과 값이 다르다 (CW6 / 정지1 / CCW6,
-	 * 30RPM). 2026-08-26 변경 - dongjak.h DJ_RINSE_* 참조. */
-	case DJ_RINSE1_STIR: case DJ_RINSE1_DRAIN:
-	case DJ_RINSE2_STIR: case DJ_RINSE2_DRAIN:
-		p->pattern = PROTO_PAT_TRI;
-		p->on_ms   = (uint16_t)DJ_RINSE_CW_MS;
-		p->off_ms  = (uint16_t)DJ_RINSE_STOP_MS;
+	/* 헹굼 교반 = **4구간** 정3/정지1/역3/정지1, 30RPM (R3 C013, 2026-09-20).
+	 * PROTO_PAT_TRI 는 '정/정지/역' 삼각 패턴 코드라 4구간의 마지막 정지를
+	 * 표현하지 못한다 — 앱 표시는 8단계 동기화에서 정리한다. dongjak.h DJ_RINSE_* 참조. */
+	/* ★개정4 ④: 헹굼 교반은 회전수 운전이다(정/정지/역 시간 패턴 아님). phase·since 는
+	 * 엔진 미러, on/off_ms 는 옛 시간값이라 앱 표시용 근사일 뿐이다 — 8단계에서 정리.
+	 * OPEN 에서도 DRAIN 운전이 돌므로 함께 표시한다. */
+	case DJ_RINSE1_STIR: case DJ_RINSE1_OPEN: case DJ_RINSE1_DRAIN:
+	case DJ_RINSE2_STIR: case DJ_RINSE2_OPEN: case DJ_RINSE2_DRAIN:
+	case DJ_SELFCLEAN:   /* ★§0.30 자가세척 — 같은 WASH/DRAIN */
+	case DJ_PREP:        /* 준비 탐색(R001~R006) — 수동 탐색이지만 같은 표시로 둔다 */
+		/* ★2026-09-22 앱 동기화: 회전수 운전 표시(PROTO_PAT_ROT). */
+		p->pattern = PROTO_PAT_ROT;
+		p->rep     = (uint8_t)(RotStir_Legs(&g_dongjak.rot) & 0xFFU);
+		p->on_ms   = 0U;
+		p->off_ms  = 2000U;                        /* P53 */
 		break;
-	/* 건조 교반 = 식힘/배출과 같은 3구간 패턴 (CW6 / 정지1 / CCW6).
-	 * ★2026-08-26: 구 패턴 A(CW3/정지2 ×5 -> CCW3)와 반복 카운터 stir_reps 폐지.
-	 * rep 은 반복 개념이 없어져 0 으로 남는다. */
+	/* ★R3 C034·C035(2026-09-20) 건조 교반은 20RPM 이고 두 구간으로 갈린다:
+	 *   - 초기 120초(분쇄 COARSE 동기, 역회전 없음) = 정5/정지2 토글 [C034]
+	 *   - 본 건조                                   = (정5+정지2)×5 -> 역3 -> 정지2 [C035]
+	 * rep 에 정회전 묶음 카운터(stir_reps)를 실어 앱이 5회 묶음을 볼 수 있게 한다
+	 * (§0.9.2 에서 지웠던 필드의 복원). 110분↑ RPM 전환은 C036 으로 폐기. */
+	/* ★개정4 ⑤ [§0.31]: 건조 교반은 PROCESS 회전수 운전(2회전 + 정지 2 s)이다. 구동 길이는 시간이 아니라
+	 * 회전수라 on_ms = 0 으로 보낸다. phase·since 는 엔진 미러, rep = 현 구간 운전 수. 앱 표시는 8단계. */
 	case DJ_HEAT:
-		p->pattern = PROTO_PAT_TRI;
-		p->on_ms   = (uint16_t)DJ_S313_CW_MS;
-		p->off_ms  = (uint16_t)DJ_S313_STOP_MS;
+		p->pattern = PROTO_PAT_ROT;                /* ★2026-09-22 앱 동기화 */
+		p->rep     = g_dongjak.stir_reps;
+		p->on_ms   = 0U;
+		p->off_ms  = 2000U;                        /* P53 rotation_stop_ms */
 		break;
-	/* 식힘: 뜨거울 때는 CW 연속, 식으면 313 패턴 */
+	/* 식힘: 뜨거울 때는 CW 연속(20RPM), 식으면 3구간 패턴.
+	 * ★R3 C043: 식힘 80℃ 미만 구간은 DJ_COOL_S313_*(정3/정지1/역3, 20RPM)로
+	 * 건조·배출의 DJ_S313_*(6/1/6)와 갈렸다 — 앱 표시도 함께 맞춘다. */
 	case DJ_COOLDOWN:
 		if (g_dongjak.cool_phase == 0U)
 		{
@@ -594,11 +648,12 @@ static void stir_pattern(MotorPattern *p)
 		else
 		{
 			p->pattern = PROTO_PAT_TRI;
-			p->on_ms   = (uint16_t)DJ_S313_CW_MS;
-			p->off_ms  = (uint16_t)DJ_S313_STOP_MS;
+			p->on_ms   = (uint16_t)DJ_COOL_S313_CW_MS;
+			p->off_ms  = (uint16_t)DJ_COOL_S313_STOP_MS;
 		}
 		break;
-	/* 배출 교반 = 313 패턴 (배출 위상 EXPEL 구간에서만) */
+	/* 배출 교반 = ★§0.37 회로(U30 SEL=B, AUX 한 방향)가 돌린다 — MCU 는 명령하지 않으므로 아래 끝의
+	 * "지령 0 → OFF" 로 떨어진다. 313 값은 DJ_DISCH_STIR_BY_CIRCUIT=0 빌드용. 표시 정리는 8단계. */
 	case DJ_DISCHARGE:
 		p->pattern = PROTO_PAT_TRI;
 		p->on_ms   = (uint16_t)DJ_S313_CW_MS;
@@ -626,18 +681,15 @@ static void grind_pattern(MotorPattern *p)
 
 	switch (g_dongjak.grind_mode)
 	{
-	case DJ_GM_COARSE:   /* 1차 거친 분쇄 1500 CW, 구동 3s / 정지 2s */
-		p->pattern = PROTO_PAT_TOGGLE;
-		p->on_ms   = (uint16_t)DJ_GRIND_RUN_MS;
-		p->off_ms  = (uint16_t)DJ_GRIND_STOP_MS;
-		break;
-	case DJ_GM_FINE:     /* 연속 분쇄 1000 CW */
-		p->pattern = PROTO_PAT_CONT;
-		break;
-	case DJ_GM_FINAL:    /* 110분↑ 2000 CCW, 구동 4s / 정지 2s */
-		p->pattern = PROTO_PAT_TOGGLE;
-		p->on_ms   = (uint16_t)DJ_GRIND_RUN_FINAL_MS;
-		p->off_ms  = (uint16_t)DJ_GRIND_STOP_FINAL_MS;
+	/* ★개정4 ⑤ [§0.31]: 건조 분쇄는 교반과 같은 가동 구간(PROCESS). COARSE = 초기 30회 1200,
+	 * FINE = 이후 반복 1200, FINAL = 110분 late 2000(교반 반대 방향). 구동 길이는 회전수라 on_ms = 0. */
+	case DJ_GM_COARSE:
+	case DJ_GM_FINE:
+	case DJ_GM_FINAL:
+		p->pattern = PROTO_PAT_ROT;                /* ★2026-09-22 앱 동기화 */
+		p->rep     = (uint8_t)(RotStir_Legs(&g_dongjak.rot) & 0xFFU);
+		p->on_ms   = 0U;
+		p->off_ms  = 2000U;                        /* P53 */
 		break;
 	case DJ_GM_COOL:     /* 식힘 중 1000 CCW 연속 */
 		p->pattern = PROTO_PAT_CONT;
@@ -827,6 +879,14 @@ uint16_t Proto_BuildPayload(uint8_t cmd, uint8_t *buf, uint16_t buf_sz)
 		return (buf_sz < PROTO_LEN_MON_CFG)  ? 0U : build_mon_cfg(buf);
 	case PROTO_CMD_CONTROL:
 		return (buf_sz < PROTO_LEN_CONTROL)  ? 0U : build_control(buf);
+#if ENABLE_TESTBENCH_APP
+	case PROTO_CMD_TB_STATE:
+		return TbApp_BuildState(buf, buf_sz);
+	case PROTO_CMD_TB_STATE2:
+		return TbApp_BuildState2(buf, buf_sz);
+	case PROTO_CMD_TB_CTRL:
+		return TbApp_BuildCtrl(buf, buf_sz);
+#endif
 	default:
 		return 0;
 	}
@@ -855,6 +915,10 @@ uint16_t Proto_MonMinPeriodMs(uint8_t mask)
 	if (mask & PROTO_MON_JUNGJI)  bytes += OVH + PROTO_LEN_JUNGJI;
 	if (mask & PROTO_MON_MOTOR)   bytes += OVH + PROTO_LEN_MOTOR;
 	if (mask & PROTO_MON_OUTPUT)  bytes += OVH + PROTO_LEN_OUTPUT;
+#if ENABLE_TESTBENCH_APP
+	if (mask & PROTO_MON_TB_STATE) bytes += (OVH + PROTO_LEN_TB_STATE) +
+	                                         (OVH + PROTO_LEN_TB_STATE2); /* 0x27+0x28 */
+#endif
 
 	if (bytes == 0UL)
 		return PROTO_MON_MIN_MS;
@@ -971,6 +1035,15 @@ static uint8_t handle_control(const ProtoFrame *f)
 		}
 		return 1U;
 
+	case PROTO_ACT_DJ_SELFCLEAN:
+		/* 처리·배출 생략, 자가세척(DJ_SELFCLEAN)부터. DJ_HEAT 직행과 같은 래치 규칙. */
+		if (!ModeArbiter_RequestDongjakSelfclean())
+		{
+			g_proto.last_nak = (uint8_t)PROTO_NAK_BAD_VALUE;
+			return 0U;
+		}
+		return 1U;
+
 	case PROTO_ACT_DJ_HEAT:
 	case PROTO_ACT_DJ_HEAT_ND:
 		/* 헹굼을 건너뛰고 DJ_HEAT 부터. 여기서는 요청만 남긴다 - 이 함수는
@@ -1017,8 +1090,10 @@ static uint8_t handle_control(const ProtoFrame *f)
 #endif
 
 	case PROTO_ACT_CLEAR_ERR:
-		/* err_clear_req 는 dongjak 이 1회성으로 소비하는 래치다. */
+		/* err_clear_req 는 dongjak·moeum 이 1회성으로 소비하는 래치다(자기 모드의 MotorTick 에서).
+		 * ★§0.33 G3: 래치형 에러(E03·E04·E08·E09)는 이 명령으로만 풀린다. */
 		g_dongjak.err_clear_req = 1U;
+		g_moeum.err_clear_req   = 1U;
 		return 1U;
 
 	default:
@@ -1088,6 +1163,53 @@ static void handle_write(const ProtoFrame *f)
 			g_proto.last_nak = (uint8_t)PROTO_NAK_VERIFY_FAIL;
 		break;
 
+	case PROTO_CMD_VOICE_UPD:
+		/* 음성 이미지 다운로드 모드 진입(1회성 정비 기능). 여기서 ACK 를 TX
+		 * 링에 넣고 나면 UART5 의 RX 소비자가 voiceupdater 로 바뀐다.
+		 * ACK 자체는 TX 링 + 인터럽트로 나가므로 모드 전환과 경쟁하지 않는다.
+		 * 되읽어 검증할 상태값이 없는 "동작 요청"이라 §2 의 readback 규칙 대신
+		 * 진입 성공 여부를 그대로 ACK/NAK 로 돌려준다(CONTROL 과 같은 성격). */
+		if ((f->len != 1U) || (f->data[0] != 0x01U))
+		{
+			g_proto.last_nak = (uint8_t)PROTO_NAK_BAD_VALUE;
+			break;
+		}
+		ok = VoiceUpdater_Enter();
+		if (!ok)
+			g_proto.last_nak = (uint8_t)PROTO_NAK_BUSY;
+		break;
+
+#if ENABLE_TESTBENCH_APP
+	case PROTO_CMD_TB_CTRL:
+		/* 테스트벤치 항목 1개 쓰기. 여기서도 액추에이터를 직접 만지지 않는다 -
+		 * TbApp_Write() 는 tb_* 플래그만 쓰고 구동은 MotorTask 의 TB_*_Poll()
+		 * 이 한다(아래 읽기전용 분기의 주의문과 같은 규칙). */
+		if (f->len != PROTO_LEN_TB_CTRL_W)
+		{
+			g_proto.last_nak = (uint8_t)PROTO_NAK_BAD_LEN;
+			break;
+		}
+		if (f->data[1] != PROTO_TB_MAGIC)
+		{
+			g_proto.last_nak = (uint8_t)PROTO_NAK_BAD_VALUE;
+			break;
+		}
+		{
+			uint32_t v = (uint32_t)f->data[2]
+			           | ((uint32_t)f->data[3] << 8)
+			           | ((uint32_t)f->data[4] << 16)
+			           | ((uint32_t)f->data[5] << 24);
+			uint8_t  nak = (uint8_t)PROTO_NAK_NONE;
+
+			ok = TbApp_Write((tb_item_t)f->data[0], v, &nak);
+			if (!ok)
+				g_proto.last_nak = nak;
+		}
+		break;
+
+	case PROTO_CMD_TB_STATE:
+	case PROTO_CMD_TB_STATE2:
+#endif
 	case PROTO_CMD_SYS_INFO:
 	case PROTO_CMD_STATUS:
 	case PROTO_CMD_MOEUM:
@@ -1309,6 +1431,16 @@ static void push_periodic(uint32_t now_ms)
 		(void)Proto_SendPayload((uint8_t)PROTO_TYPE_M, (uint8_t)PROTO_CMD_SENSOR);
 	if (g_proto.mon_mask & PROTO_MON_JUNGJI)
 		(void)Proto_SendPayload((uint8_t)PROTO_TYPE_M, (uint8_t)PROTO_CMD_JUNGJI);
+#if ENABLE_TESTBENCH_APP
+	/* 벤치 상태는 맨 뒤다 - 시나리오 운전 중에는 의미가 적고, 회선이 밀릴 때
+	 * 가장 먼저 희생되어도 되는 패킷이기 때문이다(앱은 R 로 언제든 조회 가능). */
+	if (g_proto.mon_mask & PROTO_MON_TB_STATE)
+	{
+		(void)Proto_SendPayload((uint8_t)PROTO_TYPE_M, (uint8_t)PROTO_CMD_TB_STATE);
+		/* 0x28 은 같은 비트를 공유한다(마스크 8비트가 다 찼다, §0.39). */
+		(void)Proto_SendPayload((uint8_t)PROTO_TYPE_M, (uint8_t)PROTO_CMD_TB_STATE2);
+	}
+#endif
 }
 
 /* 디버거에서 dbg_push_* 에 1 을 쓰면 그 패킷을 1회 즉시 송신(앱 없이 회선 확인) */
@@ -1341,6 +1473,11 @@ void Proto_Tick(uint32_t now_ms)
 	uint8_t c;
 	uint16_t guard = UART_CTRL_RX_BUFSZ;   /* 한 틱에 링 1회분까지만 처리 */
 
+	/* ★음성 다운로드 모드에서는 UART5 소유자가 voiceupdater 다. 여기서
+	 * 바이트를 하나라도 빼가면 로더의 VU 프레임이 깨진다. 모니터링(M) 송신도
+	 * 같이 멈춘다 - 로더가 회선을 독점해야 하기 때문이다(voiceupdater.h). */
+	if (VoiceUpdater_IsActive()) return;
+
 	/* 1) 수신 소진 -> 프레임 완성 시 즉시 응답 */
 	while (guard-- && UartCtrl_ReadByte(&c))
 	{
@@ -1349,6 +1486,9 @@ void Proto_Tick(uint32_t now_ms)
 			dispatch(&s_frame);
 		else if (r < 0)
 			g_proto.rx_err++;
+
+		/* 방금 처리한 프레임이 다운로드 진입이었다면 즉시 손을 뗀다. */
+		if (VoiceUpdater_IsActive()) return;
 	}
 
 	/* 2) 모니터링(M) 송신. 변화 즉시 송신 -> 주기 송신 순서.

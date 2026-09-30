@@ -109,9 +109,17 @@ typedef enum
 
 /* ---- 튜닝 상수 ----------------------------------------------------------- */
 /* 위치 확정에 필요한 연속 동일 샘플 수(100ms 주기). 마개가 이웃 위치를 스쳐
- * 지나갈 때 그 위치가 확정되어 엉뚱한 모드가 뜨는 것을 막는다. */
+ * 지나갈 때 그 위치가 확정되어 엉뚱한 모드가 뜨는 것을 막는다.
+ * ★2026-09-21: 3(300ms) -> 10(1.0s). 마개를 천천히 돌리면 중간 위치(정지·배수)에
+ *   0.3초만 머물러도 확정되어 엉뚱한 모드/정지가 떴다. 늘리는 대상은 **실제 위치**
+ *   (강음/동작/정지/배수/모음)뿐이다 - 시작/모드 전환이 약 1초 늦어진다.
+ *   이탈(NONE)·이중인식(MULTI)은 4.5 "추가 투입 금지" 안전정지라 늦추면 안 되므로
+ *   MODEARB_LOST_CONFIRM_SAMPLES 로 따로 둔다(종전 3 = 300ms 유지). */
 #ifndef MODEARB_CONFIRM_SAMPLES
-#define MODEARB_CONFIRM_SAMPLES  3U      /* ≈300ms                            */
+#define MODEARB_CONFIRM_SAMPLES  10U     /* ≈1.0s : 실제 위치 확정            */
+#endif
+#ifndef MODEARB_LOST_CONFIRM_SAMPLES
+#define MODEARB_LOST_CONFIRM_SAMPLES 3U  /* ≈300ms: NONE/MULTI(안전정지) 확정 */
 #endif
 /* 마개 위치로 쓰는 홀 채널 마스크(HS1~HS5 = bit0..bit4). */
 #ifndef MODEARB_HS_MASK
@@ -143,6 +151,10 @@ typedef struct
 	 * 소비 지점이다. 둘은 배타적이라 하나를 세우면 다른 하나를 지운다. */
 	uint8_t           pend_cool;
 	volatile uint8_t  cool_wait;
+	/* ★자가세척(DJ_SELFCLEAN) 직행 요청 [2026-09-22 앱 동기화]. pend_heat·pend_cool 과 같은 규칙·
+	 * 같은 소비 지점이며 셋은 서로 배타적이다. */
+	uint8_t           pend_selfclean;
+	volatile uint8_t  selfclean_wait;
 
 	volatile uint8_t  dbg_disable;  /* 1 = 중재자 무력화(디버거 수동 모드)    */
 	volatile uint8_t  dbg_pos_force;/* LidPos 강제 주입(0=미사용, 홀 없이 시험) */
@@ -164,6 +176,9 @@ uint8_t ModeArbiter_RequestDongjakHeat(uint8_t skip_door);
  * Dongjak_Abort)가 g_dongjak.dbg_enter_cool 을 지우므로, 요청은 여기 pend_cool 에
  * 담아 두었다가 전환·제동이 끝난 뒤에 세운다. 성공 1 / 거절 0(중재자 무력화 시). */
 uint8_t ModeArbiter_RequestDongjakCool(void);
+/* 동작 시나리오를 처리·배출 없이 **자가세척(DJ_SELFCLEAN)** 부터 시작한다(앱 '동작 (자가세척부터)').
+ * 같은 래치 규칙 — 전환·제동이 끝난 뒤 g_dongjak.dbg_enter_selfclean 을 세운다. 성공 1 / 거절 0. */
+uint8_t ModeArbiter_RequestDongjakSelfclean(void);
 void   ModeArbiter_SenseTick(void);            /* 100ms, StartDefaultTask     */
 void   ModeArbiter_MotorTick(uint32_t now_ms); /* 1ms,  StartMotorTask        */
 LidPos ModeArbiter_GetPos(void);                /* 확정 위치                  */

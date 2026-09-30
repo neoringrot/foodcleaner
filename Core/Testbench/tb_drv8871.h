@@ -22,11 +22,11 @@ extern "C" {
 
 extern volatile uint8_t tb_wdoor_enable;   /* 1 = run U5 water door, 0 = stop */
 extern volatile uint8_t tb_wdoor_duty;     /* 0-100 % PWM                     */
-extern volatile uint8_t tb_wdoor_reverse;  /* 0 = Open dir, 1 = Close dir     */
+extern volatile uint8_t tb_wdoor_reverse;  /* 0 = Close(닫힘), 1 = Open(열림) — TDoor 와 반대, 벤치 확정 2026-08-25 */
 
 extern volatile uint8_t tb_tdoor_enable;   /* 1 = run U7 trash door, 0 = stop */
 extern volatile uint8_t tb_tdoor_duty;     /* 0-100 % PWM                     */
-extern volatile uint8_t tb_tdoor_reverse;  /* 0 = Open dir, 1 = Close dir     */
+extern volatile uint8_t tb_tdoor_reverse;  /* 0 = Open(열림), 1 = Close(닫힘) — 벤치 확정 2026-08-25 */
 
 /* Limit auto-stop (default ON). With this set, Poll() reads the door-limit Hall
  * for the direction being driven -- WDoor_AtOpen()/AtClose(), the same decode
@@ -46,7 +46,7 @@ extern volatile uint8_t tb_wdoor_limit_hit;
 extern volatile uint8_t tb_tdoor_limit_hit;
 
 /* WDoor direction profile (default ON). Direction is confirmed on the bench:
- * tb_wdoor_reverse = 0 -> Open, 1 -> Close. The two directions behave
+ * tb_wdoor_reverse = 0 -> Close, 1 -> Open (opposite of TDoor). The two directions behave
  * differently, both timed from the start of the run:
  *   Open  : tb_wdoor_open_kick_duty (80 %) for tb_wdoor_open_kick_ms (2000 ms)
  *           to break away, then tb_wdoor_open_run_duty (65 %) held. Normally
@@ -80,21 +80,24 @@ extern volatile uint8_t tb_wdoor_time_hit;
 /* TDoor profile (default ON). The door is driven at tb_tdoor_run_duty (80 %),
  * and its Hall limit does NOT stop the motor dead: the first confirmed hit
  * latches an overrun window and the door keeps turning for
- * tb_tdoor_overrun_ms (1000 ms) so it travels clear of the sensor, then coasts
- * and clears tb_tdoor_enable. The window is latched, so the level going away
+ * tb_tdoor_close_overrun_ms (2800 ms) on Close so it travels clear of the sensor,
+ * then coasts (Open: tb_tdoor_open_overrun_ms = 200 ms). Both are counted from the
+ * FIRST poll that saw the Hall, i.e. the confirm window is subtracted. At the
+ * end of the overrun the motor coasts and clears tb_tdoor_enable. The window is latched, so the level going away
  * as the door passes the magnet does not cut it short; flipping
  * tb_tdoor_reverse mid-run drops it (that is a new run).
  * While the profile is on, Poll() WRITES tb_tdoor_run_duty into tb_tdoor_duty
  * every poll -- set tb_tdoor_profile = 0 to hand tb_tdoor_duty back to manual
  * control, which also makes the limit stop the motor immediately (overrun 0).
- * Each direction also has its own hard run-time cap (14300 ms both, kept as
+ * Each direction also has its own hard run-time cap (20000 ms both, kept as
  * separate variables so they can be tuned apart): the backstop for a Hall that
  * never fires. It bounds the WHOLE run, so it also truncates an overrun that
  * was latched too close to the cap, and it raises tb_tdoor_time_hit instead of
  * tb_tdoor_limit_hit. tb_tdoor_profile = 0 removes the caps as well. */
 extern volatile uint8_t  tb_tdoor_profile;       /* 1 = profile, 0 = manual  */
 extern volatile uint8_t  tb_tdoor_run_duty;      /* 0-100 %, flat drive duty */
-extern volatile uint16_t tb_tdoor_overrun_ms;    /* extra run past Hall [ms] */
+extern volatile uint16_t tb_tdoor_open_overrun_ms;  /* extra run past THALL-OPEN  [ms] */
+extern volatile uint16_t tb_tdoor_close_overrun_ms; /* extra run past THALL-CLOSE [ms] */
 extern volatile uint16_t tb_tdoor_open_max_ms;   /* Open run cap [ms]        */
 extern volatile uint16_t tb_tdoor_close_max_ms;  /* Close run cap [ms]       */
 
@@ -104,6 +107,15 @@ extern volatile uint8_t tb_tdoor_overrun;
 /* Status, read-only: 1 = the run ended on its time cap, not on the Hall.
  * Cleared when the next run starts. */
 extern volatile uint8_t tb_tdoor_time_hit;
+
+/* Diagnostics, read-only (2026-09-22). Cleared at run start.
+ *   tb_tdoor_hit_ms  : run start -> first poll that saw the Hall [ms], 0 = not seen
+ *   tb_tdoor_hit_src : 1 = pin level really asserted when confirmed,
+ *                      2 = only the latched EXTI falling edge (glitch / passed-by suspect)
+ *   tb_tdoor_run_ms  : run start -> motor stop [ms] */
+extern volatile uint32_t tb_tdoor_hit_ms;
+extern volatile uint8_t  tb_tdoor_hit_src;
+extern volatile uint32_t tb_tdoor_run_ms;
 
 void TB_DRV8871_Init(void);
 void TB_DRV8871_Poll(void);   /* apply current enable/duty state once */

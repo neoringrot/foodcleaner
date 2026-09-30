@@ -4,6 +4,8 @@
  * ========================================================================== */
 
 #include "mode_arbiter.h"
+#include "voice.h"
+#include "voice_table.h"
 
 #include "hallsensor.h"
 #include "jungji.h"
@@ -72,6 +74,13 @@ static void modearb_on_pos_change(ModeArbCtx *a, uint8_t pos)
 	case LID_POS_NONE:
 		/* 마개가 어느 위치에도 없다 = 열렸거나 이동 중. 4.5 "추가 투입 금지"
 		 * 대상이므로 즉시 정지. 모드는 유지한다(헤더 §정지 규칙 참조). */
+		/* 음성: "음식물 세척 중입니다. 마개를 닫고 모음 위치에 놓아 주세요"
+		 * (§0.14.11). 설계서 §4 가 이 멘트를 **모음 전용**으로 잡았고, 동작 중
+		 * 이탈용 멘트는 녹음 자체가 없다 - 그래서 모드를 확인하고 운전 중일
+		 * 때만 울린다. 정지가 소리를 끊지 않도록 Jungji_Speaker() 를 함께
+		 * 고쳤다(같은 절). 이 지점은 위치 전이 1회당 1번만 불린다. */
+		if ((g_app_mode == APP_MODE_MOEUM) && Moeum_IsBusy())
+			(void)Voice_Play(VOICE_MOEUM_LID_OPEN, VOICE_PRIO_ERROR);
 		Jungji_Request(JUNGJI_SRC_HS_LOST, JUNGJI_KIND_EMERGENCY);
 		break;
 
@@ -112,6 +121,8 @@ void ModeArbiter_Init(void)
 	a->pend_heat     = 0U;
 	a->heat_wait     = 0U;
 	a->pend_cool     = 0U;
+	a->pend_selfclean = 0U;
+	a->selfclean_wait = 0U;
 	a->cool_wait     = 0U;
 	a->dbg_disable   = 0U;
 	a->dbg_pos_force = 0U;
@@ -144,7 +155,9 @@ void ModeArbiter_SenseTick(void)
 		return;                   /* 디버거 수동 모드: 중재 일체 중지 */
 	}
 
-	/* 디바운스: 동일 위치가 MODEARB_CONFIRM_SAMPLES 회 연속이어야 확정. */
+	/* 디바운스: 동일 위치가 N 회 연속이어야 확정. N 은 위치 종류로 갈린다 -
+	 * 실제 위치는 MODEARB_CONFIRM_SAMPLES(1.0s, 스쳐 지나감 방지), 이탈/이중인식은
+	 * MODEARB_LOST_CONFIRM_SAMPLES(300ms, 안전정지 지연 방지). mode_arbiter.h 참조. */
 	if (pos == a->cand)
 	{
 		if (a->cand_cnt < 255U) { a->cand_cnt++; }
@@ -155,7 +168,12 @@ void ModeArbiter_SenseTick(void)
 		a->cand_cnt = 1U;
 	}
 
-	if (a->cand_cnt < (uint8_t)MODEARB_CONFIRM_SAMPLES) { return; }
+	{
+		uint8_t need = ((pos == (uint8_t)LID_POS_NONE) || (pos == (uint8_t)LID_POS_MULTI))
+		             ? (uint8_t)MODEARB_LOST_CONFIRM_SAMPLES
+		             : (uint8_t)MODEARB_CONFIRM_SAMPLES;
+		if (a->cand_cnt < need) { return; }
+	}
 	if (pos == a->pos_stable)                           { return; }
 
 	a->pos_stable = pos;
@@ -192,6 +210,7 @@ uint8_t ModeArbiter_RequestMode(app_mode_t mode, uint8_t start, uint8_t allow_st
 	a->pend_start = (uint8_t)(start ? 1U : 0U);
 	a->pend_heat  = 0U;             /* 일반 시작 요청은 직행 요청을 취소한다   */
 	a->pend_cool  = 0U;
+	a->pend_selfclean = 0U;
 	a->pend_valid = 1U;
 	return 1U;
 }
@@ -206,7 +225,8 @@ uint8_t ModeArbiter_RequestDongjakHeat(uint8_t skip_door)
 	a->pend_mode  = (uint8_t)APP_MODE_DONGJAK;
 	a->pend_start = 0U;             /* 정상 시작(헹굼부터)은 하지 않는다 */
 	a->pend_heat  = (uint8_t)(skip_door ? 2U : 1U);
-	a->pend_cool  = 0U;             /* 둘은 배타적이다 */
+	a->pend_cool  = 0U;             /* 셋은 배타적이다 */
+	a->pend_selfclean = 0U;
 	a->pend_valid = 1U;
 	return 1U;
 }
@@ -220,8 +240,25 @@ uint8_t ModeArbiter_RequestDongjakCool(void)
 
 	a->pend_mode  = (uint8_t)APP_MODE_DONGJAK;
 	a->pend_start = 0U;
-	a->pend_heat  = 0U;             /* 둘은 배타적이다 */
+	a->pend_heat  = 0U;             /* 셋은 배타적이다 */
 	a->pend_cool  = 1U;
+	a->pend_selfclean = 0U;
+	a->pend_valid = 1U;
+	return 1U;
+}
+
+uint8_t ModeArbiter_RequestDongjakSelfclean(void)
+{
+	ModeArbCtx *a = &g_modearb;
+
+	if (a->dbg_disable != 0U)
+		return 0U;
+
+	a->pend_mode  = (uint8_t)APP_MODE_DONGJAK;
+	a->pend_start = 0U;
+	a->pend_heat  = 0U;             /* 셋은 배타적이다 */
+	a->pend_cool  = 0U;
+	a->pend_selfclean = 1U;
 	a->pend_valid = 1U;
 	return 1U;
 }
@@ -248,20 +285,33 @@ void ModeArbiter_MotorTick(uint32_t now_ms)
 		a->pend_heat  = 0U;
 		a->cool_wait  = a->pend_cool;
 		a->pend_cool  = 0U;
+		a->selfclean_wait = a->pend_selfclean;
+		a->pend_selfclean = 0U;
 	}
 
 	/* 정지/제동이 끝난 뒤에 시작 지령. 제동 홀드 중에 Start 하면 BLDC 가
 	 * 단락제동 상태에서 기동 지령을 받게 되므로 반드시 기다린다. */
-	if (((a->start_wait != 0U) || (a->heat_wait != 0U) || (a->cool_wait != 0U)) &&
+	if (((a->start_wait != 0U) || (a->heat_wait != 0U) || (a->cool_wait != 0U) ||
+	     (a->selfclean_wait != 0U)) &&
 	    (Jungji_IsBraking() == 0U))
 	{
 		uint8_t heat  = a->heat_wait;
 		uint8_t cool  = a->cool_wait;
+		uint8_t sclean = a->selfclean_wait;
 		a->start_wait = 0U;
 		a->heat_wait  = 0U;
 		a->cool_wait  = 0U;
+		a->selfclean_wait = 0U;
 
-		if (cool != 0U)
+		if (sclean != 0U)
+		{
+			/* ★자가세척 직행. 세우는 지점이 heat 와 같은 이유는 아래 주석 참조. */
+			if (g_app_mode == APP_MODE_DONGJAK)
+			{
+				g_dongjak.dbg_enter_selfclean = 1U;
+			}
+		}
+		else if (cool != 0U)
 		{
 			/* ★식힘 직행. 세우는 지점이 heat 와 같은 이유는 위 주석 참조. */
 			if (g_app_mode == APP_MODE_DONGJAK)

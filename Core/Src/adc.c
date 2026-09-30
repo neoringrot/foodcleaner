@@ -48,7 +48,7 @@ void MX_ADC1_Init(void)
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.NbrOfConversion = 7;
+  hadc1.Init.NbrOfConversion = 8;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
   {
     Error_Handler();
@@ -117,6 +117,15 @@ void MX_ADC1_Init(void)
   {
     Error_Handler();
   }
+
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_13;
+  sConfig.Rank = ADC_REGULAR_RANK_8;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE BEGIN ADC1_Init 2 */
 
   /* USER CODE END ADC1_Init 2 */
@@ -142,12 +151,14 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef* adcHandle)
     PC0     ------> ADC1_IN10
     PC1     ------> ADC1_IN11
     PC2     ------> ADC1_IN12
+    PC3     ------> ADC1_IN13
     PA0-WKUP     ------> ADC1_IN0
     PC5     ------> ADC1_IN15
     PB0     ------> ADC1_IN8
     PB1     ------> ADC1_IN9
     */
-    GPIO_InitStruct.Pin = adc1_THERMISTOR1_Pin|adc1_THERMISTOR2_Pin|adc1_THERMISTOR3_Pin|adc1_DC_CURR1_Pin;
+    GPIO_InitStruct.Pin = adc1_THERMISTOR1_Pin|adc1_THERMISTOR2_Pin|adc1_THERMISTOR3_Pin|adc1_WEIGHT_SENS_Pin
+                          |adc1_DC_CURR1_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
@@ -180,12 +191,14 @@ void HAL_ADC_MspDeInit(ADC_HandleTypeDef* adcHandle)
     PC0     ------> ADC1_IN10
     PC1     ------> ADC1_IN11
     PC2     ------> ADC1_IN12
+    PC3     ------> ADC1_IN13
     PA0-WKUP     ------> ADC1_IN0
     PC5     ------> ADC1_IN15
     PB0     ------> ADC1_IN8
     PB1     ------> ADC1_IN9
     */
-    HAL_GPIO_DeInit(GPIOC, adc1_THERMISTOR1_Pin|adc1_THERMISTOR2_Pin|adc1_THERMISTOR3_Pin|adc1_DC_CURR1_Pin);
+    HAL_GPIO_DeInit(GPIOC, adc1_THERMISTOR1_Pin|adc1_THERMISTOR2_Pin|adc1_THERMISTOR3_Pin|adc1_WEIGHT_SENS_Pin
+                          |adc1_DC_CURR1_Pin);
 
     HAL_GPIO_DeInit(adc1_DISTANCE_SENS_GPIO_Port, adc1_DISTANCE_SENS_Pin);
 

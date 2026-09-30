@@ -14,10 +14,16 @@ extern "C" {
  * tca9554 - TI TCA9554 / TCA9554A 8-bit I2C & SMBus I/O expander driver.
  *
  * Transport (this board): I2C1 (hi2c1), PB6 = I2C1_SCL, PB7 = I2C1_SDA, with
- * 4.7k pull-ups (R53/R54). Three expanders share the bus: U8, U9, U10.
- *   U8  P0..P7 -> DIS-LED1..8   (outputs, front-panel LEDs)
- *   U9  P0..P7 -> DIS-SW1..8    (inputs,  membrane keypad switches)
- *   U24 P0..P7 -> HS1..HS8 hall sensors (see hallsensor.c)
+ * 4.7k pull-ups (R53/R54). Three expanders share the bus:
+ *   U31 (0x39) P0..P7 -> DIS-SW1..8    (inputs,  membrane keypad switches)
+ *   U32 (0x38) P0..P7 -> DIS-LED1..8   (outputs, front-panel LEDs)
+ *   U24 (0x3B) P0..P7 -> HS1..HS8 hall sensors (see hallsensor.c)
+ *
+ * REV02 (C076): the keypad/LED roles are the REVERSE of the R0-era names kept
+ * below - on the REV02 netlist U31 (A0=1) = 0x39 = DIS-SW and U32 (A0=A1=A2=0)
+ * = 0x38 = DIS-LED, which also matches what the bench measured on R1. Use the
+ * role-named macros (TCA9554_U31_SW_ADDR / TCA9554_U32_LED_ADDR); the U8/U9
+ * spellings are kept only so existing call sites still build.
  *
  * IMPORTANT - part variant / address:
  *   The parts fitted are TCA9554A (marking "TCA9554APWR" in the netlist), whose
@@ -29,16 +35,17 @@ extern "C" {
  *
  * IMPORTANT - address pins on the schematic (confirmed strapping):
  *   Each device gets a unique hardware address via its A2/A1/A0 straps so the
- *   three expanders do not collide on the shared bus:
- *        U8  A2=0 A1=0 A0=1  ->  0x39   (DIS-LED driver)
- *        U9  A2=0 A1=0 A0=0  ->  0x38   (DIS-SW keypad)
- *        U10 A2=0 A1=1 A0=1  ->  0x3B   (other I/O)
+ *   three expanders do not collide on the shared bus (REV02 netlist):
+ *        U31 A2=0 A1=0 A0=1  ->  0x39   (DIS-SW keypad, INT -> PF10)
+ *        U32 A2=0 A1=0 A0=0  ->  0x38   (DIS-LED driver, INT -> PF11)
+ *        U24 A2=0 A1=1 A0=1  ->  0x3B   (HS1..HS8 hall sensors)
  *   The firmware addresses below match this wiring; keep the PCB straps in sync.
  *
- * INT pin (pin 13, open-drain active-low): NOT routed to the MCU on this board
- * for U8/U9/U10. A hardware interrupt from the expander is therefore not
- * possible - the keypad is serviced by periodic polling (see tb_tca9554.h; the
- * generic membrane driver that used to do this was removed 2026-08-18).
+ * INT pin (pin 13, open-drain active-low): on REV02 every expander's INT IS
+ * routed to the MCU - U24 -> PF9 (HALL-INT1), U31 -> PF10 (HALL-INT2), U32 ->
+ * PF11 (HALL-INT3, output-only chip so unused). INT asserts on ANY input change
+ * and self-clears on an input-port read, so edge direction still has to be
+ * resolved in software (see keypad.c / hallsensor.c).
  *
  * Register model (command byte selects the register; auto-increment is not
  * used - each access carries its own command byte):
@@ -61,9 +68,16 @@ extern "C" {
 #define TCA9554_ADDR(a2, a1, a0) \
 	((uint8_t)(TCA9554_ADDR_BASE | (((a2) & 1U) << 2) | (((a1) & 1U) << 1) | ((a0) & 1U)))
 
-#define TCA9554_U8_ADDR   TCA9554_ADDR(0, 0, 1)   /* 0x39 - DIS-LED driver (outputs), A0 HIGH        */
-#define TCA9554_U9_ADDR   TCA9554_ADDR(0, 0, 0)   /* 0x38 - DIS-SW keypad (inputs), A0/A1/A2 LOW     */
-#define TCA9554_U10_ADDR  TCA9554_ADDR(0, 1, 1)   /* 0x3B - other I/O,             A0/A1 HIGH        */
+/* Role-named addresses - REV02 netlist. Use these. (C076) */
+#define TCA9554_U31_SW_ADDR   TCA9554_ADDR(0, 0, 1)  /* 0x39 - DIS-SW1..8  keypad inputs  */
+#define TCA9554_U32_LED_ADDR  TCA9554_ADDR(0, 0, 0)  /* 0x38 - DIS-LED1..8 panel outputs  */
+#define TCA9554_U24_HS_ADDR   TCA9554_ADDR(0, 1, 1)  /* 0x3B - HS1..HS8 hall inputs       */
+
+/* Deprecated R0-era spellings (the "U8 = LED / U9 = SW" naming was wrong; the
+ * addresses themselves are unchanged). Kept so existing call sites build. */
+#define TCA9554_U8_ADDR   TCA9554_U31_SW_ADDR     /* 0x39 - actually the KEYPAD  */
+#define TCA9554_U9_ADDR   TCA9554_U32_LED_ADDR    /* 0x38 - actually the LEDs    */
+#define TCA9554_U10_ADDR  TCA9554_U24_HS_ADDR     /* 0x3B - hall sensors (U24)   */
 
 /* ---- Direction masks for TCA9554_Init(config) ----------------------- */
 #define TCA9554_ALL_OUTPUTS   0x00U   /* every pin driven      */

@@ -170,7 +170,7 @@ void EXTI0_IRQHandler(void)
   /* USER CODE BEGIN EXTI0_IRQn 0 */
 
   /* USER CODE END EXTI0_IRQn 0 */
-  HAL_GPIO_EXTI_IRQHandler(exti0_BIMETAL_80_Pin);
+  HAL_GPIO_EXTI_IRQHandler(exti0_BIMETAL_70_Pin);
   /* USER CODE BEGIN EXTI0_IRQn 1 */
 
   /* USER CODE END EXTI0_IRQn 1 */
@@ -184,7 +184,7 @@ void EXTI1_IRQHandler(void)
   /* USER CODE BEGIN EXTI1_IRQn 0 */
 
   /* USER CODE END EXTI1_IRQn 0 */
-  HAL_GPIO_EXTI_IRQHandler(exti1_BIMETAL_60_Pin);
+  HAL_GPIO_EXTI_IRQHandler(exti1_BIMETAL_50_Pin);
   /* USER CODE BEGIN EXTI1_IRQn 1 */
 
   /* USER CODE END EXTI1_IRQn 1 */
@@ -242,7 +242,7 @@ void EXTI9_5_IRQHandler(void)
   /* USER CODE END EXTI9_5_IRQn 0 */
   HAL_GPIO_EXTI_IRQHandler(exti5_THALL_OPEN_Pin);
   HAL_GPIO_EXTI_IRQHandler(exti6_WATER_SEN1_Pin);
-  HAL_GPIO_EXTI_IRQHandler(exti7_WATER_SEN2_Pin);
+  HAL_GPIO_EXTI_IRQHandler(exti7_NEW_HALL_INT_Pin);
   HAL_GPIO_EXTI_IRQHandler(exti8_TIMER_OUT_Pin);
   HAL_GPIO_EXTI_IRQHandler(exti9_HALL_INT1_Pin);
   /* USER CODE BEGIN EXTI9_5_IRQn 1 */
@@ -259,6 +259,7 @@ void EXTI15_10_IRQHandler(void)
 
   /* USER CODE END EXTI15_10_IRQn 0 */
   HAL_GPIO_EXTI_IRQHandler(exti10_HALL_INT2_Pin);
+  HAL_GPIO_EXTI_IRQHandler(exti11_HALL_INT3_Pin);
   HAL_GPIO_EXTI_IRQHandler(exti12_M2_FGOT_Pin);
   HAL_GPIO_EXTI_IRQHandler(exti13_M2_nFAULT_Pin);
   HAL_GPIO_EXTI_IRQHandler(exti14_M1_nFAULT_Pin);

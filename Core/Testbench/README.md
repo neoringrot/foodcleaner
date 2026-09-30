@@ -3,6 +3,52 @@
 각 액추에이터를 **시나리오(모음/동작)와 무관하게 개별적으로** 구동/검사하기 위한 테스트베드 모음.
 모든 테스트베드는 `volatile` 전역 변수를 노출하며, **디버거(live watch / expression)에서 값을 바꾸면 즉시 반영**된다.
 
+## 🔁 2026-09-20 — **R3(REV02) 기준으로 전 항목 재점검한다**
+
+사용자 지시로 **테스트벤치 점검을 처음부터 다시 한다.** 아래 표와 각 절의 `✅ HW 검증완료`
+표기는 **그 시점 보드 기준의 기록**으로만 남겨 둔 것이고, R3 합격 판정으로 쓰지 않는다.
+보드(REV02)·핀맵(`.ioc` ioc-1~5, §0.17)·소유권 구조가 모두 바뀌었기 때문이다:
+
+| 무엇이 바뀌었나 | 벤치에 미치는 영향 |
+|---|---|
+| **키패드 HW 부활** — `membrane.*` 삭제 → `Devices/ExtGpio/keypad.*` 신설(U31 0x39 SW / U32 0x38 LED, **LED active-HIGH**) | `tb_tca9554` 는 I2C 를 안 만진다. 버튼/LED 확인은 `keypad.*` 쪽 §1-1 절차로 |
+| **`g_app_mode` 소유자 = `mode_arbiter`** (HS1~5 상시 디코딩) | 마개가 얹혀 있으면 `TB_*_Poll()` 이 통째로 멈춘다 → 아래 §2026-08-15 항목 |
+| **정지 단일화(`jungji.c`)** | 정지 한 번에 `tb_*` 플래그가 전부 0. **BLDC enable 2종도 포함**(2026-09-20) |
+| **REV02 핀 재배정** — 수위 SEN2(PF7) 소멸 → `NEW-HALL-INT`, 신규 핀 4종 | 1-24 |
+| 리프트 TIM4 HW PWM · HS8 하강 자동정지 · 분쇄 허가 관측 게이트(PF0·PF3) | 1-25 · 1-26 |
+
+### 벤치 들어가기 전 3줄 준비
+
+1. **마개(자석)를 치우거나 `g_modearb.dbg_disable = 1`** — 안 그러면 모드가 넘어가 `TB_*_Poll()` 이 멈춘다.
+2. **완화 플래그 확인** — 전수 목록은 [`../doc/HW미검증_항목R3.md`](../doc/HW미검증_항목R3.md) §2.
+   `DJ_TEST_FAST_TIMING`(0=양산 타임라인)·`DJ_DRY_GATE_BYPASS`(0)는 올렸다면 반드시 되돌린다.
+   ⚠ `MOEUM_FILL_TIMEOUT_MS`(30분)·`MOEUM_DOOR_TIMEOUT_MS`(30초)처럼 **아직 완화된 채인 값**도 있다 —
+   고장 판정이 사실상 무력이라는 뜻이므로 이번 재점검에서 실측값으로 재산정할 것.
+3. **갑자기 다 꺼지면 `g_jungji.last_src` 부터** (1=HS3 정지, 2=마개 이탈, 3=홀 다중 인식).
+
+### 권장 순서
+
+| # | 무엇 | 항목 | 왜 먼저인가 |
+|---|---|---|---|
+| 1 | 모드 중재자·정지 | 1-12 · 1-14 · **1-27** | 이게 안 잡히면 **다른 모든 벤치가 임의로 중단**된다 |
+| 2 | REV02 신규 핀 + 도어 리밋홀 | 1-24 · 1-2 | 핀맵이 맞아야 나머지 판정이 의미를 갖는다 |
+| 3 | NTC 실측 대조 + 히터 | 1-4 · 1-3 | 건조 구간 전체가 여기 걸려 있다 |
+| 4 | 분쇄 허가 게이트 | 1-26 | 거동이 눈에 띄게 바뀐 지점 |
+| 5 | 가이드(HS6) 엣지 실측 | **1-20** | **5단계 `rinse.*` 착수의 유일한 선행조건(I02)** |
+| 6 | 키패드 잔여 · 리프트 행정 · 스테퍼 실부하 | 1-16 · 1-25 · 1-7 | |
+| 7 | 음성 시나리오 매핑 | 1-23 | N8 회신 후 |
+| 8 | 통합 풀런 | 1-11 | 위가 정리된 뒤 |
+
+### 기록 방법
+
+- 결과는 [`../doc/HW미검증_항목R3.md`](../doc/HW미검증_항목R3.md) 해당 항목에 **날짜와 함께** 적는다.
+  새 항목이면 번호를 이어 붙인다(현재 최신 **1-27**).
+- 코드가 바뀌었으면 [`../doc/구현현황_및_미구현_점검R3.md`](../doc/구현현황_및_미구현_점검R3.md) 에
+  **새 §0.x 절**로 남긴다(지시 원문 → 반영 파일·상수 → 검증 상태). 현재 최신 **§0.20**.
+- **코드만으로 "검증 완료"라고 쓰지 않는다.**
+
+---
+
 ## ⚠️ 2026-08-15 변경 — 벤치 사용 전 반드시 읽을 것
 
 `g_app_mode`의 소유자가 바뀌었다. 이제 [`Core/Scenario/mode_arbiter.c`](../Scenario/mode_arbiter.c)가
@@ -16,12 +62,61 @@
    HS3(정지) 확정 / 마개 이탈 / 홀 다중 인식 시 [`jungji.c`](../Scenario/jungji.c)의
    `Jungji_Testbench()`가 `tb_wdoor_enable`·`tb_tdoor_enable`·`tb_step1/2_enable`·`tb_lift_enable`·
    `tb_water_enable`·`tb_speaker_enable`·`tb_heat_enable`·`tb_valve_*`·`tb_fan_*`를 모두 0으로 만든다.
+   ★2026-09-20 추가: **`tb_grind_en`·`tb_stir_en` 도 함께 0으로 떨어진다.** 이 둘은 레벨이 아니라
+   **엣지**로 먹으므로(`apply_enable`), 1로 둔 채 정지가 걸리면 플래그가 1에 붙어 상승엣지가
+   영영 서지 않았다 — "`tb_stir_en = 1` 인데 아무것도 안 도는" 증상이 이것이었다(§0.20, 1-27).
    **벤치 중 갑자기 다 꺼졌다면 `g_jungji.last_src`를 먼저 볼 것**(1=HS3 정지, 2=마개 이탈, 3=홀 다중 인식).
    예외: 잔열 냉각 중(`g_jungji.cooling=1`)에는 `tb_fan_exhaust_en`/`tb_bldc_fan_en`이 **1로 유지**된다.
 3. **BLDC 단락제동 홀드(`JUNGJI_BRAKE_MS`=500 ms) 동안 키패드(`TB_TCA9554_Poll`)가 건너뛰어진다.**
    `BldcCtrl_Start()`가 nBRAKE를 풀어 버리기 때문. `g_jungji.braking`으로 확인 가능.
 
-관찰용 변수 정리는 [동작_디버거_watch_레퍼런스.md §8](../Scenario/동작_디버거_watch_레퍼런스.md) 참조.
+관찰용 변수 정리는 [동작_디버거_watch_레퍼런스R3.md §8](../doc/동작_디버거_watch_레퍼런스R3.md) 참조.
+
+## 🖥 2026-09-20 신규 — **PC 앱으로 원격 검증한다** (`src/parts_verification`)
+
+디버거 live watch 없이 화면에서 `tb_*` 를 조작하고, 리미트·센서·정지 사유를 표시등으로
+되받는 프로그램이 생겼다. 디버거 경로는 그대로다 — 같은 변수를 보는 또 하나의 소비자다.
+
+```bash
+cd src/parts_verification
+pip install -r requirements.txt
+python pv_selftest.py        # 장치 없이: 코덱 + C 헤더 대조
+python pv_gui.py             # 본체
+```
+
+| 항목 | 내용 |
+|---|---|
+| 회선 | UART5 **115200 8N1**. `TP6(PC12)=장치TX` / `TP1(PD2)=장치RX` / GND 공통 |
+| 프로토콜 | 기존 R0 그대로 + **0x27 TB_STATE** · **0x28 TB_STATE2**(관측, 2026-09-22) · **0x33 TB_CTRL**(제어) |
+| 펌웨어 스위치 | `Core/Inc/main.h` 의 **`ENABLE_TESTBENCH_APP`** (기본 1, **양산은 0**) |
+| 구현 | `Core/Testbench/tb_app.{h,c}` — `tb_*` 를 회선에 여는 어댑터 |
+| 주의 | 음성 다운로더(`src/voice_updater`)와 **같은 회선이라 동시에 못 쓴다** |
+| 벤치 항목 | [`../doc/HW미검증_항목R3.md`](../doc/HW미검증_항목R3.md) **1-28**(회선) · **1-43**(§0.39 추가분) |
+
+**앱이 다루는 벤치 (2026-09-22 점검, 구현현황 §0.39)** — 아래 표에 없는 `tb_*` 는 디버거 전용이다.
+
+| 벤치 | 앱 카드 | 비고 |
+|---|---|---|
+| `tb_tca9554` 분쇄·교반 BLDC · 키패드 | 교반 / 분쇄 / 센서 모니터 | 방향 라벨은 **위에서 본 방향** — M1 reverse0=시계, **M2 reverse0=반시계**(N14) |
+| `tb_drv8871` 배수문·배출문 | 배수문 / 배출문 | 리밋정지·시간종료 래치로 정지 사유 표시 |
+| `tb_lift` · `tb_stepmotor` · `tb_gpioout` | 리프트 / 스테퍼 / 밸브·팬 | |
+| `tb_water` · `tb_heat` | 급수·히터 | 히터 카드에 **배수문 닫힘 HW 게이트**(U35, §0.36) 표시 |
+| `tb_hallsensor` · `tb_doorhall` · `tb_distance` · `tb_thermistor` | 센서 모니터 + STATUS | 바이메탈: **PF0 70℃↑=LOW / PF1 50℃↑=HIGH**(서로 반대) |
+| `tb_rinse` 원샷(I02) · **패턴 run E** | 헹굼 벤치 / **헹굼 패턴** | cnt 20/40 진행·엣지/cycle |
+| **`tb_rotation`** 자가시험 · run F | **회전수 운전 엔진** | 기대값(legs·CCW마스크·HS6)과 자동 대조 |
+| **`tb_voice`** | **음성 플래시 U21** | 자가검사(테스트 섹터 소거)는 확인창을 거친다 |
+| **`tb_protocol`** | **R0 코덱 자체검사** | |
+| `tb_speaker` | (항목만 있음, 카드 없음) | CLI `--set SPEAKER_EN=1` |
+
+**쓰기는 벤치 유휴(대기/정지)에서만 받는다.** 시나리오가 교반·도어를 쥐고 있는 동안
+앱이 끼어들면 소유자가 둘이 되기 때문이다. 관측은 모드와 무관하게 언제나 된다.
+예외는 "전부 끄기"와 "중재자 끄기" 둘뿐이다 — 끄는 쪽과 벤치로 돌아오는 쪽은 늘 안전하다.
+
+> **펌웨어에서 `tb_*` 를 추가·변경했으면** `python pv_selftest.py` 를 돌릴 것.
+> 항목 표가 C(`tb_app.h`)와 파이썬(`pv_proto.py`) 두 벌로 존재하므로, 한쪽만 고치면
+> 조용히 엉뚱한 변수를 쓰게 된다. 이 검사가 헤더를 직접 읽어 대조한다.
+
+---
 
 ## 공통 동작 모델
 
@@ -38,15 +133,17 @@
 
 | 파일 | 대상 | 드라이버 | 제어 방식 |
 |------|------|----------|-----------|
-| `tb_tca9554` | 분쇄(M1)·교반(M2) BLDC | DRV8306 + bldc_ctrl (closed-loop) | 키패드(U9) + **디버거 enable 변수** |
+| `tb_tca9554` | 분쇄(M1)·교반(M2) BLDC | DRV8306 + bldc_ctrl (closed-loop) | 키패드(`keypad.*` 이벤트 소비) + **디버거 enable 변수**. `tb_keypad_motor_en=0` 이면 버튼→모터 차단 |
+| (벤치 아님) `Devices/ExtGpio/keypad.*` | 전면 버튼 8(U31 0x39) · LED 8(U32 0x38) | TCA9554A ×2 + PF10 INT | **모든 모드**에서 `Keypad_Tick()` 상시 동작. 관측은 `g_keypad_*` (§1-1) |
 | `tb_drv8871` | 배수문(WDoor/U5)·투입문(TDoor/U7) | DRV8871 DC | 디버거 enable/duty/reverse |
 | `tb_stepmotor` | STEP1(24BYJ48)·STEP2(35BYJ46) | 유니폴라 4상 | 디버거 enable/dir/period/hold |
-| `tb_lift` | 리프트(U6) | DRV8871 DC (SW-PWM) | 디버거 enable/reverse/duty/period |
+| `tb_lift` | 리프트(U6) | DRV8871 DC (**TIM4 HW-PWM**, R1) | 디버거 enable/reverse/duty + 프로파일·HS8 하단 자동정지 |
 | `tb_gpioout` | 배수/급수 밸브 + 팬 3종 | GPIO on/off | 디버거 enable 변수 |
 | `tb_thermistor` | NTC 온도센서 3종(THERMISTER1/2/3) | ADC1(adc_ctrl) | 디버거 enable 변수(모니터링) |
 | `tb_water` | 급수 WATER-ON + 수위센서 SEN1/SEN2 | GPIO out + EXTI in | 디버거 enable 변수(출력+모니터링) |
 | `tb_doorhall` | 도어 리밋홀 WHALL/THALL(배수문·배출문 개폐) | EXTI in | 디버거 enable 변수(모니터링, 입력전용) |
 | `tb_protocol` | R0 프로토콜 코덱(액추에이터 없음) | protocol_r0 | 디버거 `tb_proto_run_once=1`(1회) / `tb_proto_enable=1`(반복) |
+| `tb_voice` | U21 음성 플래시 W25Q128(액추에이터 없음) | w25q128 (SPI1+PC4) | 디버거 one-shot `tb_voice_probe_once`/`_selftest_once`/`_dir_once` 등 (§11) |
 
 > **ADC 계열 예외(중요)**: `tb_thermistor`는 **센서 모니터** 테스트베드로, 위 "공통 동작 모델"과 달리
 > `MotorTask_RunTestbench()`가 아니라 **`StartDefaultTask()`(~100 ms)** 에서 폴링한다.
@@ -61,7 +158,7 @@
 `doc/개별기능검증R1.xlsx`의 항목별 HW 검증 진행 상태. (✅ HW검증완료 · ⏳ 미검증 · ⚠️ 부분/이슈 · ❌ 없음)
 
 > 미검증 항목의 **상세·검증절차·그동안 코드에 넣어 둔 임시 완화 플래그**는
-> **[../Scenario/HW미검증_항목.md](../Scenario/HW미검증_항목.md)** 에 정리되어 있다(2026-08-18).
+> **[../doc/HW미검증_항목R3.md](../doc/HW미검증_항목R3.md)** 에 정리되어 있다(2026-08-18).
 
 | # | xls 항목 | 테스트벤치 / 변수 | 핀·커넥터 | 상태 |
 |---|----------|-------------------|-----------|------|
@@ -78,7 +175,7 @@
 | 11 | 상단 동작 스위치(=HS1~5) | `tb_hall_*` (P0~P4) | U24/J26 | ✅ HW 검증완료 (HS1~3 초기 단락은 **리워크로 해소**, 2026-08-14 §6) |
 | 12 | 교반원점 홀센서 | `tb_hall_stir_home` (HS6) | U24 P5/J28 | ✅ HW 검증완료 (2026-08-15) · ❌ **FW 소비 로직 없음** |
 | 13 | 수거통 홀센서 | `tb_hall_bin` (HS7) | U24 P6/J29 | ✅ HW 검증완료 (2026-08-15) · ❌ **FW 소비 로직 없음 → 수거통 없이 배출됨(안전 공백)** |
-| 14 | 리프트 하단 홀센서 | `tb_hall_lift_bottom` (HS8) | U24 P7/J30 | ✅ HW 검증완료 (2026-08-15) · ❌ **FW 소비 로직 없음** |
+| 14 | 리프트 하단 홀센서 | `tb_hall_lift_bottom` (HS8) | U24 P7/J30 | ✅ HW 검증완료 (2026-08-15) · ✅ **벤치 소비 동작확인** — `Lift_AtBottom()` + `tb_lift_limit_stop` 하강 자동정지 (2026-09-20, `limit_hit` 래치 확인). 시나리오 소비는 여전히 없음(C071) |
 | 15 | 히터 | `tb_heat_*` (`tb_heat`) | **PA12** (HT-POWER) | ⏳ 미검증 (테스트벤치 추가됨 §9). ⚠️`tb_heat` 기본임계 **190/195℃는 폐기된 구 스펙** — 시나리오는 **114/117℃**(`DJ_TEMP_HEATER_ON/OFF_D10`) |
 
 **xls 미포함(테스트벤치에만 있는) 액추에이터:**
@@ -87,14 +184,76 @@
 |------|-------------------|------|
 | 분쇄 BLDC (M1) | `tb_grind_en` 외 (`tb_tca9554`) | ✅ HW 검증완료 |
 | 교반 BLDC (M2) | `tb_stir_en` 외 (`tb_tca9554`) | ✅ HW 검증완료 |
-| 리프트 모터 (U6) | `tb_lift_enable` 외 (`tb_lift`) | ✅ HW 검증완료 |
+| 리프트 모터 (U6) | `tb_lift_enable` 외 (`tb_lift`) | ◐ 구동 ✅ · **방향 ✅(0=상승/1=하강)** · **HS8 하강 자동정지 ✅**(2026-09-20) / **행정시간 ⏳** (§1-25) |
 | NTC 온도센서 3종 | `tb_therm_*` (`tb_thermistor`) | ⏳ read 동작 O / **기준 온도계 실측 대조 미완** (§7) |
 | 홀센서 HS1~HS8 (U24 8채널) | `tb_hall_*` (P0~P7) | ✅ **전 채널 정상 동작 확인** (2026-08-15, §6) |
 | 도어 리밋홀 WHALL/THALL (PF3/PF4/PF2/PF5) | `tb_doorhall_*` (`tb_doorhall`) | ⏳ 테스트벤치 추가됨 · HW 미검증 (§10). 배수문/배출문 개폐 게이팅 |
+| **키패드 8버튼/8LED (U31 0x39 / U32 0x38 / J27)** ★2026-09-20 | `g_keypad_*` (`Devices/ExtGpio/keypad.*`) + `tb_keypad_motor_en` | ⚠️ **부분 확인** — SW 8채널 눌림 이벤트 + LED 8채널 대응 ✅(2026-09-20, §1-1 절차1~4). 풀업 장기안정성·동시누름·길게누름 ⏳. 기능 배정은 I10·I14 미정 |
 
 ---
 
-## 1. `tb_tca9554` — 분쇄(M1)·교반(M2) BLDC
+## 1. `tb_tca9554` — 분쇄(M1)·교반(M2) BLDC + 키패드 8버튼/8LED
+
+> **★2026-09-20 소유권 변경** — U31(0x39 `DIS-SW1~8`)·U32(0x38 `DIS-LED1~8`) 버스는 이제
+> **`Devices/ExtGpio/keypad.*`** 가 단독 소유한다. `tb_tca9554` 는 I2C 를 직접 만지지 않고
+> `Keypad_TakePress()` 로 **눌림 이벤트를 소비해 모터를 돌리는 쪽**만 담당한다.
+> 따라서 **버튼/LED 자체의 채널 확인은 벤치 모드가 아니어도 된다** — `Keypad_Tick()` 은
+> `StartMotorTask` 루프 맨 앞에서 **모든 모드**에 대해 돌기 때문이다(§1-1).
+
+### 1-1. 버튼 8채널 대응 확인 절차 (J27 ↔ U31 P0~P7) — ⚠️ 부분 확인 (2026-09-20)
+
+> ✅ **절차 1~4(버스 인식 · SW 8채널 눌림 이벤트 · LED 8채널 대응)는 2026-09-20 벤치에서 확인됨.**
+> `tb_keypad_motor_en=0` 상태로 8개 버튼 전부 눌림 이벤트가 나오고, 누른 키의 LED만 점등·떼면
+> 소등되는 것을 확인했다. 이 관측으로 **LED 극성이 active-HIGH 로 확정**됐다(구현현황 §0.10.7).
+> ⏳ 남은 것: **1의 장시간 안정성(풀업) · 5(동시 누름) · 6(3초 길게) · 7(bus_err)**.
+
+**목적**: 패널 SW1~8 이 `g_keypad_btn[0]~[7]` 에 1:1로 들어오는지, LED1~8 이 같은 인덱스로
+나가는지 확인한다. 모터를 돌릴 필요가 없다.
+
+**준비 — 반드시 먼저**
+
+| 순서 | 할 일 | 이유 |
+|---|---|---|
+| 1 | J27 18핀 FFC 삽입·방향 확인 | 1·10번이 GND, 2~9=SW, 11~18=LED |
+| 2 | 디버거에서 **`tb_keypad_motor_en = 0`** | 이걸 안 하면 **SW1 한 번에 분쇄 BLDC(M1)가 즉시 돈다**. 0 이면 버튼을 눌러도 모터를 건드리지 않고 관측만 된다 |
+| 3 | `Keypad_IsPresent()` 호출(또는 `g_keypad_bus_err` 관찰) | 1 이어야 U31·U32 둘 다 ACK. 0 이면 FFC/주소부터 |
+
+**관측 변수** (전부 `Devices/ExtGpio/keypad.h`, 벤치 파일 아님)
+
+| 변수 | 의미 |
+|---|---|
+| `g_keypad_mask` | bit i = SW(i+1) 눌림(디바운스 완료). **아무것도 안 눌렀을 때 0x00 이어야 한다** |
+| `g_keypad_btn[i].press_cnt` | SW(i+1) 누적 누름 횟수 — **채널 대응은 이 값으로 본다** |
+| `g_keypad_btn[i].pressed` / `.press_ms` | 현재 눌림 / 눌린 시각 |
+| `g_keypad_btn[i].long_evt`, `.long_fired` | 3초 길게누름(`KEYPAD_LONG_PRESS_MS`) |
+| `g_keypad_led_mask` | bit i = LED(i+1) 점등 |
+| `g_keypad_bus_err` | I2C 실패 누적. **증가하면 배선/주소 문제** |
+
+**절차**
+
+| # | 조작 | 기대 | 실패 시 |
+|---|---|---|---|
+| 1 | 아무것도 누르지 않고 `g_keypad_mask` 를 10초 관찰 | **0x00 고정** | 값이 떨리거나 0xFF면 ⚠ **`DIS-SW` 풀업 문제**(아래 주의) |
+| 2 | SW1 을 1초 누름 | `g_keypad_btn[0].press_cnt` **+1**, 누르는 동안 `.pressed=1`, `g_keypad_mask` bit0=1 | 다른 인덱스가 오르면 J27 핀 순서 반대 — 표에 실제 대응 기록 |
+| 3 | SW2~SW8 을 하나씩 동일하게 | 각각 `press_cnt[1]`~`[7]` 이 **+1씩만** | 1회 누름에 2 이상 오르면 채터 → `KEYPAD_DEBOUNCE_MS`(15) 상향 |
+| 4 | 각 버튼을 누른 채 유지 | 그 키의 **LED만 소등**, 떼면 재점등 (`KEYPAD_LED_FOLLOW_PRESS=1` 기본 정책) | LED 인덱스가 어긋나면 J27 11~18 대응 기록 |
+| 5 | SW1+SW2 동시 누름 | `g_keypad_mask` = 0x03 (두 비트 동시) | 한쪽만 서면 FFC 접촉 |
+| 6 | 아무 버튼이나 **3초 이상** 누름 | `.long_fired` 1, `.long_evt` 1(500ms 안에 안 가져가면 자동 0) | — |
+| 7 | 전 과정 동안 `g_keypad_bus_err` | **0 유지** | 증가 시 I2C1 배선/풀업(R53/R54)·주소 충돌 확인 |
+| 8 | 끝나면 `tb_keypad_motor_en = 1` 복귀 | 버튼→BLDC 벤치(§1 본문) 정상 동작 | — |
+
+> ⚠ **`DIS-SW1~8` 풀업**: REV02 넷리스트에서 `DIS-SW1~8` 넷에는 **J27 핀과 U31 핀밖에 없다** —
+> 메인보드에 풀업이 없다. TCA9554 입력은 Hi-Z 라 **키패드 보드가 풀업을 갖고 있지 않으면 플로팅**
+> 이고, 1번 항목이 반드시 실패한다. U24 홀(HS1~8)에서 겪은 것과 같은 함정이다.
+> 절차 1에서 값이 뜨거나 떨리면 **펌웨어가 아니라 회로부터** 확인한다.
+
+> INT(PF10)가 죽어 있어도 동작은 한다 — 유휴 200ms 폴만 남아 반응이 최대 ~400ms 로 느려질 뿐이다.
+> 절차 2에서 "눌러도 한참 뒤에 잡힌다"면 INT 배선(R179·U31 13핀)을 본다.
+
+**기능 배정은 별건**: 위 절차는 "어느 버튼이 몇 번인지"까지다. SW1~8 이 무엇을 하는지는
+**I10·I14 미확정**이라 아직 아무 제품 기능에도 연결돼 있지 않다(구현현황 §0.10.5).
+
+### 1-2. 버튼 → BLDC 구동 (종전 기능)
 
 키패드 버튼과 **동일한 효과**를 내는 디버거 enable 변수를 추가함(이번 세션 작업).
 BLDC는 closed-loop(PI + soft-lock jam 보호)이라, enable은 **edge-triggered**로 버튼 1회 누름을 모사한다.
@@ -114,7 +273,9 @@ BLDC는 closed-loop(PI + soft-lock jam 보호)이라, enable은 **edge-triggered
 - **jam soft-lock**: 잼 감지 시 컨트롤러가 스스로 정지(`en`은 1로 남음). 재시도하려면 `en`을 0→1 재토글.
 - `BldcCtrl_Tick(&g_grind_ctrl / &g_stir_ctrl)`가 매 사이클 돌아야 회전 유지(freertos.c에서 보장).
 
-키패드 사용 시 매핑: 홀수 SW1/3/5/7=M1(분쇄), 짝수 SW2/4/6/8=M2(교반). (보드 배선상 U8/U9 주소는 넷리스트와 반전됨 — 헤더 주석 참조.)
+키패드 사용 시 매핑: 홀수 SW1/3/5/7=M1(분쇄), 짝수 SW2/4/6/8=M2(교반).
+**주소는 REV02 넷리스트 기준으로 확정** — U31=0x39=`DIS-SW`, U32=0x38=`DIS-LED`, 둘 다 active-low
+(`Devices/ExtGpio/keypad.h`). R2 시절 "넷리스트와 반대" 메모는 벤치가 맞았던 것으로 정리됐다.
 
 ## 2. `tb_drv8871` — 배수문(WDoor/U5)·투입문(TDoor/U7)
 
@@ -213,14 +374,48 @@ DC 도어 모터. **레벨(level) 방식** (enable 동안 계속 구동, VM 전�
 
 ## 4. `tb_lift` — 리프트(U6)
 
-DRV8871 DC. PG3/PG4는 타이머 채널이 없어 **소프트웨어 PWM**(`TB_Lift_Poll()` 내 tick 기반)으로 속도 제어.
+DRV8871 DC. **R1에서 PG3/PG4(타이머 없음) → PB8/PB9 = TIM4_CH3/CH4 로 이설**되어
+도어(U5/U7)와 같은 20 kHz 하드웨어 PWM을 쓴다. 예전의 소프트웨어 PWM과
+`tb_lift_pwm_period_ms`는 **폐지**됐다(HW PWM 위에 소프트 초핑이 겹치는 이중 변조였음).
+
+구조는 `tb_drv8871`과 같은 규약: 수치의 단일 출처는 `lift_motor.h`의 `LIFT_*`,
+`tb_lift_*`는 런타임 실험용 복사본. 런은 `tb_lift_enable`의 0→1 엣지에서 시작해
+리미트/시간상한에서 **스스로 enable을 0으로 되돌린다**(원샷).
+
+> **행정 센서는 하단(HS8) 하나뿐이다.** REV02 넷리스트 기준 리프트 상단 리미트는
+> 회로에 없다 → **상승은 `tb_lift_up_max_ms` 시간 상한으로만 끝난다.** 상한을 크게
+> 잡으면 기구 끝단에 물린 채 계속 민다. (J16/PF7 `NEW-HALL-INT`는 미배정 홀 입력으로
+> 남아 있으나 용도 N9 회신 대기이며 가이드 홀로 추정 — 리프트 상단으로 확정된 바 없음.)
 
 | 변수 | 동작 |
 |------|------|
-| `tb_lift_enable` | 1=구동 / 0=정지 |
-| `tb_lift_reverse` | 0=Up, 1=Down (회전 중 변경 시 즉시 반전 — 정지 상태에서 변경 권장) |
-| `tb_lift_duty` | 0~100 % (0=coast) |
-| `tb_lift_pwm_period_ms` | SW-PWM 주기(≥1 ms). 10 ms≈100 Hz/~10 % 스텝, 20 ms≈50 Hz/~5 % 스텝 |
+| `tb_lift_enable` | 1=구동 / 0=정지. 종료 시 펌웨어가 0으로 되돌림 |
+| `tb_lift_reverse` | **0=상승 / 1=하강 (✅ 확정 2026-09-20)**. 런 중 반전하면 새 런으로 재시작 |
+| `tb_lift_duty` | 0~100 %. 프로파일 ON이면 **적용 duty 표시용**(매 poll 덮어씀) |
+| `tb_lift_profile` | 1=프로파일(duty·시간상한 적용) / 0=수동 duty·상한 없음 |
+| `tb_lift_run_duty` | 구동 duty, 기본 `LIFT_DUTY`(80 %) |
+| `tb_lift_up_max_ms` | 상승 상한 [ms], 기본 `LIFT_UP_MAX_MS` — **상승의 유일한 종료 조건** |
+| `tb_lift_down_max_ms` | 하강 상한 [ms], 기본 `LIFT_DOWN_MAX_MS` — HS8 미인식 백스톱 |
+| `tb_lift_limit_stop` | 1=하강 시 HS8 자동정지(5 ms 확인) / 0=자유구동 |
+| `tb_lift_down_reverse` | 하강 = `tb_lift_reverse` **1**(확정, 기본값과 일치). 바꾸지 말 것 |
+| `tb_lift_limit_hit` | (RO, **래치**) 1=HS8 인식으로 종료. 센서를 풀어도 유지되며 **다음 런 시작 때만** 0으로 지워진다 |
+| `tb_lift_time_hit` | (RO, **래치**) 1=시간 상한으로 종료. 해제 조건은 위와 동일 |
+| `tb_lift_at_bottom` | (RO, **래치 아님**) HS8 현재 레벨(디바운스 전). 구동 중이 아니어도 센서를 따라 움직이므로 **정지 원인의 증거가 아니다** |
+| `tb_lift_last_run_ms` | (RO) 마지막 런 길이 [ms] — 행정시간 실측값 |
+
+**방향 ✅ 확정 [2026-09-20]**: `tb_lift_reverse` **0=상승 / 1=하강**. 임시 매핑이 맞아
+`lift_motor.c` 스왑은 하지 않았다.
+
+**HS8 하강 자동정지 ✅ 확정 [2026-09-20]**: 하강 중 인식 → `at_bottom=1` + `limit_hit=1` 래치 +
+정지. 센서를 풀면 `at_bottom`만 0으로 돌아가고 `limit_hit`는 1을 유지한다(래치, 다음 런에서 해제).
+하단에 앉은 채 다시 하강을 걸면 새 런이 시작돼 래치가 지워졌다가 5 ms 뒤 다시 멈춘다(짧게 움찔).
+상승은 게이트 대상이 아니라 그대로 빠져나온다.
+
+**남은 실측(행정시간)**: `tb_lift_down_max_ms`를 넉넉히(예: 15000) 올린 뒤 하강 →
+**`tb_lift_limit_hit`(HS8) / `tb_lift_time_hit`(상한)** 으로 정지 원인을 구분하고
+`tb_lift_last_run_ms`로 하강 행정시간을 잰다. 상승은 센서가 없으므로 육안으로 상단까지
+걸리는 시간을 재서 `tb_lift_up_max_ms`를 정한다. 값이 나오면 `lift_motor.h`의
+`LIFT_DUTY`/`LIFT_UP_MAX_MS`/`LIFT_DOWN_MAX_MS` 잠정값(TBD: C071)을 교체하고 ⚠️ 경고를 지운다.
 
 ## 5. `tb_gpioout` — 밸브·팬 (on/off GPIO) — 이번 세션 신규 파일
 
@@ -629,6 +824,91 @@ enable 엣지에서 stale 플래그를 1회 클리어해 시작 시점 레벨을
 - 확인 필요: ① 문을 손으로(또는 `tb_wdoor_*`/`tb_tdoor_*`로) 여닫을 때 해당 at-limit이 1로, `_events` 증가, ② 극성(`DOOR_LIMIT_ACTIVE_HIGH`) 실제 배선 일치, ③ 열림/닫힘 리밋 분리, ④ 4개 채널 개별 응답.
 
 ---
+
+## 11. `tb_voice` — U21 음성 플래시(W25Q128) (이번 세션 신규 파일)
+
+> 설계서 [doc/U21_음성플래시_구조R3.md](../doc/U21_음성플래시_구조R3.md) §1·§2·§3·§9 ·
+> 드라이버 §0.11 · 검증 [HW미검증_항목R3.md](../doc/HW미검증_항목R3.md) **1-17**.
+
+**`tb_speaker` 와 혼동 금지** — 대상이 겹치지 않는다.
+
+| | `tb_speaker` | `tb_voice` |
+|---|---|---|
+| 대상 | LM4871 앰프 + DAC 출력단 | U21 플래시 안의 음성 데이터 |
+| 핀 | SPK-EN(PA3) · SPK-DAC(PA4) | SPI1(PA5/6/7) · /CS(PC4) |
+| 묻는 것 | "스피커에서 소리가 나는가" | "음성 데이터가 있고 멀쩡한가" |
+
+핀도 주변장치도 공유하지 않으므로 **동시에 켜도 간섭하지 않는다.**
+
+### 커맨드 (one-shot — 1 을 쓰면 다음 폴에 1회 실행 후 자동 0)
+
+`tb_protocol` 과 같은 방식이다. `TB_Voice_Poll()` 은 **StartDefaultTask(100ms)** 에서 돈다
+— 드라이버가 블로킹이고 섹터 이레이즈가 최대 400ms 라 1ms `MotorTask` 에는 올릴 수 없다.
+
+| 커맨드 | 하는 일 | 읽을 결과 |
+|---|---|---|
+| `tb_voice_probe_once` | JEDEC ID + `W25Q_Init()` | `tb_voice_jedec_id`(= `0xEF4018`), `tb_voice_status`(0=OK) |
+| `tb_voice_selftest_once` | ★**소거/기록 왕복** (아래 안전장치) | `tb_voice_step`(7=DONE), `tb_voice_fails`(0), `tb_voice_erase_ms` |
+| `tb_voice_dir_once` | 디렉터리(§2) 읽기·검증 | `tb_voice_dir_valid`/`_crc_ok`/`_blank`/`_slots`/`_rate` |
+| `tb_voice_hdr_once` | `tb_voice_slot` 번 슬롯 헤더(§3) | `tb_voice_hdr_valid`/`_crc_ok`/`_len`/`_dur_ms` |
+| `tb_voice_dump_once` | `tb_voice_addr` 에서 64B | `tb_voice_dump[64]` |
+
+이미지를 아직 안 구운 보드에서는 `tb_voice_dir_blank` = 1 이 **정상**이다(§2 "0xFF = 디렉터리 없음").
+
+### ★ 쓰기 안전장치 — 자가검사는 실제로 지우고 쓴다
+
+두 겹으로 막아 뒀다. 어느 쪽에 걸려도 `tb_voice_step` = 1(`REFUSED`) 로 끝나고 플래시는 그대로다.
+
+1. **주소 화이트리스트** — `tb_voice_test_addr` 는 **0x001000 ~ 0x00FFFF** 의 4KB 정렬 주소만 받는다
+   (§1 맵의 "블록 0 섹터 1~15 예약"). **0x000000(디렉터리)와 0x040000 이상(슬롯 32개)은 거부.**
+   기본값 `0x001000`. 정렬까지 요구하는 이유는, 드라이버가 주소를 섹터 단위로 절삭하므로
+   어긋난 주소를 넣으면 **의도한 곳이 아닌 섹터가 지워지기** 때문이다.
+2. **모드 게이트** — `AppMode_IsBenchIdle()` 이 아니면 소거/기록을 하지 않는다. 자가검사 1회가
+   defaultTask 를 **~0.9초** 묶어서 센서 폴링과 SenseTick 이 그만큼 밀리기 때문.
+   읽기 커맨드(probe/dir/hdr/dump)는 수 ms 라 모드와 무관하게 돈다(SPI1 에는 U21 뿐이라
+   시나리오와 다툴 상대가 없다 — `tb_heat`/`tb_water` 의 핀 소유권 문제와는 상황이 다르다).
+
+검사가 끝나면 시험 섹터는 **소거된 상태(0xFF)로 남는다.**
+
+### 자가검사 단계 (`tb_voice_step` — 멈춘 번호가 곧 실패 지점)
+
+| 값 | 단계 | 실패하면 볼 것 |
+|---|---|---|
+| 1 | `REFUSED` | 주소 화이트리스트 위반 또는 벤치 모드 아님 |
+| 2 | `ERASE1` | 소거 명령 실패 → `tb_voice_status`. WEL 미래치면 **SB21/SB22**(/WP) |
+| 3 | `BLANK1` | 소거 후에도 0xFF 가 아님 → `tb_voice_bad_off`/`_got` |
+| 4 | `PROGRAM` | 기록 실패 |
+| 5 | `VERIFY` | `W25Q_Verify` 불일치 |
+| 6 | `REREAD` | 독립 재읽기 불일치(Verify 는 통과했는데 여기서 깨지면 읽기 경로 의심) |
+| **7** | **`DONE`** | **통과** |
+
+기록은 `test_addr + 0xF0` 에서 **512B** 를 쓴다 — 256B 페이지 경계를 반드시 걸치게 해서
+`W25Q_Write` 의 페이지 분할을 실제로 태우기 위한 것이다(02h 는 페이지 안에서 랩어라운드한다).
+
+### 아직 없는 것 (4단계에서 추가)
+
+`tb_voice_play_id` / `tb_voice_stop`(재생)과 `tb_voice_load_slot`(UART 슬롯 로더, 설계서 §8).
+재생은 `Speaker/voice.*` 플레이어와 `.ioc` 의 TIM2 TRGO 16kHz + DAC DMA2_CH3(검토서 ioc-6~8)가
+있어야 성립한다. 블로킹 루프로 흉내내면 defaultTask 가 음성 길이(최장 7.8초) 동안 멈추므로
+넣지 않았다.
+
+---
+
+
+## 12. `tb_rotation` — R3 개정4 회전수 운전 엔진 (2026-09-21 신규 파일)
+
+벤더 0.3.0 `rotation.c`(`Core/Scenario/`, 본문 무수정)를 검증한다. 상세 절차·기대값은 **`tb_rotation.h` 머리말**과
+`doc/HW미검증_항목R3.md` **1-30**. MotorTask 벤치 분기에서 폴링되며 `tb_rinse` 와 교반을 배타로 쓴다.
+
+| 모드 | 시작 | 핵심 결과 |
+|---|---|---|
+| A. 자가시험 | `tb_rotation_selftest_once=1` | `selftest_fail_line==0`, `selftest_asserts==186` |
+| B. run F | `tb_rotation_profile`(1 WASH/2 DRAIN/3 PROCESS) → `tb_rotation_once=1` | `result`·`legs`·`dir_mask`·`edges`·`leg_edges`·`rest_wait_ms` |
+
+- 위치원 `tb_rotation_pos_src`: 0 = HS6 엣지(단순안, 벤치 전용) / 1 = `BldcCtrl_Position()`(FG, P54=822).
+- 정지 판정 `BldcCtrl_IsAtRest()` — 시간은 `g_stir_ctrl.rest_ms` 로 조정.
+- **1번째 운전을 위에서 보고 반시계면 `tb_rotation_dir_invert=1`** (N14).
+- 분쇄(M1)는 구동하지 않는다 — 70℃ 허가 없이 명령하면 소프트락(§0.19).
 
 ## 사용 예시 (디버거)
 

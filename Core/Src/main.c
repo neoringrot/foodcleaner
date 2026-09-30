@@ -37,6 +37,8 @@
 #include "uart_ctrl.h"
 #include "protocol_r0.h"
 #include "lm4871.h"
+#include "w25q128.h"
+#include "voice.h"
 #include "tb_doorhall.h"
 /* USER CODE END Includes */
 
@@ -58,6 +60,16 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+
+/* U21 W25Q128 boot probe result, kept for the debugger/bench (§0.11).
+ * g_w25q_jedec_id is the RAW answer to 9Fh, stored whether or not it matched,
+ * so a failed probe still shows what came off the bus:
+ *   0xEF4018 + W25Q_OK  -> chip alive
+ *   0xFFFFFF            -> MISO never driven (SB21/SB22 open, R81 open, no part)
+ *   0x000000            -> MISO stuck LOW
+ * Nothing consumes the flash yet; a failure here is not fatal. */
+volatile w25q_status_t g_w25q_init_status = W25Q_ERROR;
+volatile uint32_t      g_w25q_jedec_id    = 0u;
 
 /* USER CODE END PV */
 
@@ -151,6 +163,24 @@ int main(void)
    * expanders itself in TB_TCA9554_Init() (StartMotorTask, freertos.c) and maps
    * key presses to the BLDC test motors while in APP_MODE_TESTBENCH. */
 
+  /* U21 W25Q128 -- 16MB SPI NOR (the "EEPROM" on the schematic) on SPI1 with
+   * /CS = PC4. Probe only: read the JEDEC id and record the outcome. Must run
+   * after MX_SPI1_Init()/MX_GPIO_Init() above, and it is safe here because the
+   * probe is two short transactions with no BUSY wait (the scheduler is not up
+   * yet, so the driver's osDelay() yield must not be reached -- see w25q128.c).
+   *
+   * The voice player (4단계) is what will actually use the flash; until then
+   * this only tells the bench whether the part answers. A failure is NOT fatal
+   * -- the machine runs without voice -- so nothing is gated on it. If the id
+   * comes back 0xFFFFFF, check SB21/SB22 (the /WP and /HOLD pull-up bridges)
+   * and R81/R82 before suspecting the part. (§0.11, HW미검증 1-17) */
+  {
+    uint32_t w25q_id = 0u;
+    (void)W25Q_ReadID(&w25q_id);        /* raw id first: kept even on BAD_ID */
+    g_w25q_jedec_id    = w25q_id;
+    g_w25q_init_status = W25Q_Init();
+  }
+
   /* U15 LM4871 speaker amplifier driven by the DAC: PA4 (DAC_OUT1) -> Ci/Ri ->
    * -IN, shutdown on PA3 (o_EN_SPK, active-low). Must run after MX_DAC_Init()
    * and MX_GPIO_Init() above. Init parks the DAC at mid-scale and leaves the
@@ -158,6 +188,12 @@ int main(void)
    * (Blocking ~120ms via the DWT delay -- fine here, before the scheduler.) */
   LM4871_BoardInit();
   LM4871_Beep(&lm4871, 2000u, 120u);
+
+  /* 음성 재생기: TIM2(16kHz TRGO) + DAC DMA2_CH3 를 코드로 설정한다.
+   * .ioc 에 없는 설정이라 CubeMX 재생성이 지우지 않는다 - 4단계에서
+   * ioc-6~8 로 정식 반영할 때 이 수동 설정을 걷어낼 것(voice.h 참조).
+   * MX_DAC_Init()/MX_SPI1_Init()/LM4871_BoardInit() 뒤여야 한다. */
+  Voice_Init();
 
   /* USER CODE END 2 */
 

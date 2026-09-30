@@ -58,17 +58,18 @@ static const gpio_map_t in_map[GPIO_IN_COUNT] =
 /* EXTI pin table - one entry per gpio_exti_t enumerator. */
 static const gpio_map_t exti_map[GPIO_EXTI_COUNT] =
 {
-	[GPIO_EXTI_BIMETAL_80] = { exti0_BIMETAL_80_GPIO_Port, exti0_BIMETAL_80_Pin },
-	[GPIO_EXTI_BIMETAL_60] = { exti1_BIMETAL_60_GPIO_Port, exti1_BIMETAL_60_Pin },
+	[GPIO_EXTI_BIMETAL_70] = { exti0_BIMETAL_70_GPIO_Port, exti0_BIMETAL_70_Pin },
+	[GPIO_EXTI_BIMETAL_50] = { exti1_BIMETAL_50_GPIO_Port, exti1_BIMETAL_50_Pin },
 	[GPIO_EXTI_THALL_CLOSE]= { exti2_THALL_CLOSE_GPIO_Port,exti2_THALL_CLOSE_Pin},
 	[GPIO_EXTI_WHALL_CLOSE]= { exti3_WHALL_CLOSE_GPIO_Port,exti3_WHALL_CLOSE_Pin},
 	[GPIO_EXTI_WHALL_OPEN] = { exti4_WHALL_OPEN_GPIO_Port, exti4_WHALL_OPEN_Pin },
 	[GPIO_EXTI_THALL_OPEN] = { exti5_THALL_OPEN_GPIO_Port, exti5_THALL_OPEN_Pin },
 	[GPIO_EXTI_WATER_SEN1] = { exti6_WATER_SEN1_GPIO_Port,exti6_WATER_SEN1_Pin},
-	[GPIO_EXTI_WATER_SEN2] = { exti7_WATER_SEN2_GPIO_Port,exti7_WATER_SEN2_Pin},
+	[GPIO_EXTI_NEW_HALL_INT]={ exti7_NEW_HALL_INT_GPIO_Port,exti7_NEW_HALL_INT_Pin},
 	[GPIO_EXTI_TIMER_OUT]  = { exti8_TIMER_OUT_GPIO_Port, exti8_TIMER_OUT_Pin },
 	[GPIO_EXTI_HALL_INT1]  = { exti9_HALL_INT1_GPIO_Port, exti9_HALL_INT1_Pin },
 	[GPIO_EXTI_HALL_INT2]  = { exti10_HALL_INT2_GPIO_Port,exti10_HALL_INT2_Pin},
+	[GPIO_EXTI_HALL_INT3]  = { exti11_HALL_INT3_GPIO_Port,exti11_HALL_INT3_Pin},
 	[GPIO_EXTI_M2_FGOT]    = { exti12_M2_FGOT_GPIO_Port,  exti12_M2_FGOT_Pin  },
 	[GPIO_EXTI_M2_nFAULT]  = { exti13_M2_nFAULT_GPIO_Port,exti13_M2_nFAULT_Pin},
 	[GPIO_EXTI_M1_nFAULT]  = { exti14_M1_nFAULT_GPIO_Port,exti14_M1_nFAULT_Pin},

@@ -45,11 +45,13 @@ volatile uint16_t tb_wdoor_close_ms        = WDOOR_CLOSE_MS;
 volatile uint8_t tb_wdoor_time_hit = 0;
 
 /* TDoor profile: 80 % flat, and the limit does not stop the motor dead -- the
- * door keeps turning for tb_tdoor_overrun_ms (1 s) past the Hall so it travels
+ * door keeps turning past the Hall on Close (tb_tdoor_close_overrun_ms 2.8 s, tdoor.h)
+ * -- Open stops 200 ms after the Hall (tb_tdoor_open_overrun_ms) -- so it travels
  * clear of the sensor before coasting. */
 volatile uint8_t  tb_tdoor_profile      = 1;
 volatile uint8_t  tb_tdoor_run_duty     = TDOOR_DUTY;
-volatile uint16_t tb_tdoor_overrun_ms   = TDOOR_OVERRUN_MS;
+volatile uint16_t tb_tdoor_open_overrun_ms  = TDOOR_OPEN_OVERRUN_MS;
+volatile uint16_t tb_tdoor_close_overrun_ms = TDOOR_CLOSE_OVERRUN_MS;
 volatile uint16_t tb_tdoor_open_max_ms  = TDOOR_OPEN_MAX_MS;
 volatile uint16_t tb_tdoor_close_max_ms = TDOOR_CLOSE_MAX_MS;
 
@@ -60,6 +62,15 @@ volatile uint8_t tb_tdoor_overrun = 0;
 /* Status (read-only): 1 = the run ended on its per-direction time cap, i.e.
  * the Hall never fired (or fired too late for the full overrun). */
 volatile uint8_t tb_tdoor_time_hit = 0;
+
+/* ★진단(2026-09-22, "닫힘이 센서 인식 전에 멈춘다" 조사). 런 시작에서 0 으로 지운다.
+ *   tb_tdoor_hit_ms  : 런 시작 → THALL 을 처음 본 시각(ms). 0 = 이번 런에 미인식
+ *   tb_tdoor_hit_src : 인식 확정 순간의 근거 1 = 핀 레벨이 실제로 도달 / 2 = 레벨은 아닌데
+ *                      EXTI 하강엣지 래치만 서 있음(= 글리치·통과 의심)
+ *   tb_tdoor_run_ms  : 런 시작 → 모터 정지(ms). 정지 사유는 limit_hit / time_hit */
+volatile uint32_t tb_tdoor_hit_ms  = 0;
+volatile uint8_t  tb_tdoor_hit_src = 0;
+volatile uint32_t tb_tdoor_run_ms  = 0;
 
 /* Track previous enable state so VM is switched only on transitions (avoids
  * re-toggling the enable GPIO every poll). */
@@ -227,7 +238,9 @@ void TB_DRV8871_Poll(void)
 	{
 		uint8_t  at      = tb_tdoor_reverse ? TDoor_ReachedClose()
 		                                   : TDoor_ReachedOpen();
-		uint16_t over_ms = tb_tdoor_profile ? tb_tdoor_overrun_ms : 0;
+		uint16_t over_ms = !tb_tdoor_profile ? 0
+		                   : (tb_tdoor_reverse ? tb_tdoor_close_overrun_ms
+		                                       : tb_tdoor_open_overrun_ms);
 		uint16_t max_ms  = !tb_tdoor_profile ? 0                    /* 0 = no cap */
 		                   : (tb_tdoor_reverse ? tb_tdoor_close_max_ms
 		                                       : tb_tdoor_open_max_ms);
@@ -253,7 +266,12 @@ void TB_DRV8871_Poll(void)
 		    limit_hit(at, &tdoor_confirm))
 		{
 			tb_tdoor_overrun = 1;
-			tdoor_over_ms = HAL_GetTick();
+			/* 추가회전은 THALL 을 **처음 본 시각**부터 센다 — 확인 창(TB_DOOR_LIMIT_CONFIRM,
+			 * 1 ms 폴링 × 5)만큼 거슬러 잡아 시나리오(dongjak.c, 확인 없이 즉시)와 같은
+			 * 기산점이 되게 한다(2026-09-22, 열림 50 ms → 200 ms 지시). */
+			tdoor_over_ms = HAL_GetTick() - ((uint32_t)TB_DOOR_LIMIT_CONFIRM - 1U);
+			tb_tdoor_hit_ms  = tdoor_over_ms - tdoor_start_ms;
+			tb_tdoor_hit_src = (tb_tdoor_reverse ? TDoor_AtClose() : TDoor_AtOpen()) ? 1U : 2U;
 		}
 
 		if (tdoor_running && max_ms &&
@@ -264,6 +282,7 @@ void TB_DRV8871_Poll(void)
 			 * was latched too close to the cap. */
 			TDoor_Stop();
 			TDoor_Disable();
+			tb_tdoor_run_ms = HAL_GetTick() - tdoor_start_ms;
 			tdoor_running = 0;
 			tdoor_confirm = 0;
 			tb_tdoor_enable = 0;
@@ -275,6 +294,7 @@ void TB_DRV8871_Poll(void)
 		{
 			TDoor_Stop();            /* coast */
 			TDoor_Disable();         /* VM off */
+			tb_tdoor_run_ms = HAL_GetTick() - tdoor_start_ms;
 			tdoor_running = 0;
 			tdoor_confirm = 0;
 			tb_tdoor_enable = 0;     /* auto-stop: the switch drops itself */
@@ -292,6 +312,7 @@ void TB_DRV8871_Poll(void)
 				tdoor_dir = tb_tdoor_reverse;
 				tb_tdoor_limit_hit = 0;
 				tb_tdoor_time_hit = 0;
+				tb_tdoor_hit_ms = 0; tb_tdoor_hit_src = 0; tb_tdoor_run_ms = 0;
 			}
 
 			if (tb_tdoor_profile)

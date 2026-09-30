@@ -9,33 +9,21 @@ extern "C" {
 #endif
 
 /* -------------------------------------------------------------------------
- * tb_tca9554 - front-panel keypad (U9) + LED (U8) testbed that drives the two
- * DRV8306 BLDC motors (M1 grinder, M2 stirrer) from button presses.
+ * tb_tca9554 - front-panel keypad testbed: turns button presses into DRV8306
+ * BLDC commands (M1 grinder, M2 stirrer).
  *
- * Hardware (I2C1) - ADDRESSING CONFIRMED ON THE BENCH, and it is the REVERSE of
- * the netlist labels in Devices/ExtGpio/tca9554.h: on this board the keypad and
- * LED expanders are swapped, so this testbed uses the addresses below (verified
- * working - keypad reads and LEDs light correctly):
- *   0x39 (A0=1, netlist "U8")  P0..P7 = DIS-SW1..8   -> buttons, read as INPUTS
- *   0x38 (A0=0, netlist "U9")  P0..P7 = DIS-LED1..8  -> panel LEDs, OUTPUTS
- * Hence TB_TCA9554_Init() binds  s_sw -> TCA9554_U8_ADDR(0x39),
- *                                s_led-> TCA9554_U9_ADDR(0x38).
- * Both lines are ACTIVE-LOW on this board (press = pin LOW, LED lit = pin LOW),
- * so TB_TCA9554_SW_ACTIVE_HIGH / _LED_ACTIVE_HIGH are both 0. See the netlist
- * analysis doc (doc/회로도_넷리스트_분석.md, section 8) for the full note.
+ * OWNERSHIP (REV02): this file no longer touches I2C. Devices/ExtGpio/keypad.*
+ * is the single owner of U31 (0x39, DIS-SW1..8) and U32 (0x38, DIS-LED1..8) and
+ * does the debouncing, the press/long-press events and the LED latch; this
+ * testbed only calls Keypad_TakePress(). Wiring, addresses and polarity live in
+ * keypad.h. (Before REV02 this file owned the two expanders itself - see the
+ * deleted membrane.* / R2 notes.)
  *
- * SINGLE OWNER of U8/U9 (2026-08-18):
- *   This testbed is now the ONLY owner. The generic press-to-toggle membrane
- *   driver (Devices/ExtGpio/membrane.*) was deleted - the product controls
- *   nothing from the front-panel buttons, so there is no longer a second driver
- *   to fight over the LED port / I2C bus. Keypad-driven motor testing stays
- *   available here, gated to APP_MODE_TESTBENCH by StartMotorTask.
- *
- * LED behaviour (TCA9554 has NO PWM/dimming - it is a pure digital I/O
- * expander, registers are only Input/Output/Polarity/Config). So instead of
- * dimming on press, every DIS-LED is driven HIGH (lit) by default, and while a
- * button is HELD its matching LED is turned OFF; releasing lights it again.
- * SWn <-> LEDn, 1:1 for all 8 channels.
+ * LED behaviour comes from keypad.c: TCA9554 has no PWM, so the panel is dark
+ * and only a HELD key's LED lights until release (KEYPAD_LED_FOLLOW_PRESS).
+ * SWn <-> LEDn, 1:1 for all 8 channels. The LEDs are ACTIVE-HIGH - confirmed on
+ * the REV02 bench 2026-09-20; the old "active-low + lit by default" pair in this
+ * file cancelled out to the same waveform, and keypad.h now states it correctly.
  *
  * Button -> motor map (buttons are 1-based on the panel; index below is 0-based):
  *   Odd  buttons SW1/3/5/7 -> M1 (grinder, drv8306_m1 / U11)
@@ -49,7 +37,7 @@ extern "C" {
  *                 steps up, and a press at the top wraps back:
  *                 -> 800 -> 1200 -> 1600 -> 2000 -> 2500 -> 800 -> ... [rpm]
  *   SW8 (M2)  : speed up one rung each press on the STIRRER's OUTPUT-shaft
- *                 ladder (1:49 geared): 20 -> 25 -> 30 -> 35 -> 40 -> 20 [rpm]
+ *                 ladder (blade rpm, §0.22): 20 -> 25 -> 30 -> 35 -> 40 -> 20 [rpm]
  *
  * BOTH motors are commanded CLOSED-LOOP through bldc_ctrl: M1 = g_grind_ctrl,
  * M2 = g_stir_ctrl (BldcCtrl_Start/Stop/SpeedStep), and the "stopped?" gate is
@@ -58,33 +46,15 @@ extern "C" {
  * each controller is touched from one context only.
  *
  * Call model (StartMotorTask, freertos.c):
- *     TB_DRV8306_Init();  TB_TCA9554_Init();
- *     for (;;) { TB_TCA9554_Poll(); TB_DRV8306_Poll(); ...; osDelay(1); }
- * TB_TCA9554_Poll() does one U9 read + at most one U8 write per call.
+ *     Keypad_Init(); TB_DRV8306_Init(); TB_TCA9554_Init();
+ *     for (;;) { Keypad_Tick(now); ...; TB_TCA9554_Poll(); ...; osDelay(1); }
+ * TB_TCA9554_Poll() itself does no bus traffic at all.
  * ---------------------------------------------------------------------- */
 
 #define TB_TCA9554_BTN_COUNT   8U    /* SW1..8 / LED1..8 */
 
-/* Debounce depth in poll samples. StartMotorTask polls at ~1 ms, so 8 samples
- * ~= 8 ms of stable contact - above membrane bounce, still responsive. */
-#ifndef TB_TCA9554_DEBOUNCE_SAMPLES
-#define TB_TCA9554_DEBOUNCE_SAMPLES  8U
-#endif
-
-/* Electrical sense of a *pressed* key on the U9 input. This board is ACTIVE-LOW
- * (a press pulls the pin to GND), so this is 0: TB_TCA9554_Init() then programs
- * U9's polarity-inversion register (0xFF) so a press still reads as logical 1
- * and edge detection stays polarity-agnostic. Set 1 if a press drives HIGH. */
-#ifndef TB_TCA9554_SW_ACTIVE_HIGH
-#define TB_TCA9554_SW_ACTIVE_HIGH    0U
-#endif
-
-/* Drive level that LIGHTS a DIS-LED. This board wires the LEDs ACTIVE-LOW
- * (common-anode / sinking), so this is 0: the port value is inverted, a LOW pin
- * lights the LED. Set 1 for active-high (HIGH lights it). */
-#ifndef TB_TCA9554_LED_ACTIVE_HIGH
-#define TB_TCA9554_LED_ACTIVE_HIGH   0U
-#endif
+/* Debounce, switch polarity and LED polarity now live in keypad.h
+ * (KEYPAD_DEBOUNCE_MS / KEYPAD_SW_ACTIVE_HIGH / KEYPAD_LED_ACTIVE_HIGH). */
 
 /* The SW7 (M1) and SW8 (M2) speed ladders are defined in bldc_ctrl.c as
  * GRIND_LADDER[] (motor RPM) and STIR_LADDER[] (output RPM). Edit those arrays
@@ -120,6 +90,13 @@ extern volatile uint8_t tb_led_mask;   /* lit LEDs      */
  *                        while this stays 1; clear to 0 then back to 1 to retry).
  *   tb_*_rev    : direction sampled at the START edge. 0 = forward/CW, 1 = rev/CCW.
  *   tb_*_spd_req: write 1 to advance one speed rung (like SW7/SW8); auto-clears. */
+/* 키패드 -> 모터 결선 차단(기본 1 = 종전대로 동작).
+ * 0 으로 쓰면 버튼을 눌러도 BldcCtrl_Start/Stop/SpeedStep 을 호출하지 않는다.
+ * J27 8채널 대응 확인처럼 "버튼이 어느 핀인지"만 볼 때, SW1 한 번에 분쇄
+ * BLDC 가 도는 것을 막기 위한 것이다. tb_btn[]/press_cnt 관측은 그대로 된다.
+ * 디버거 enable 변수(tb_grind_en 등)는 이 플래그와 무관하게 계속 듣는다. */
+extern volatile uint8_t tb_keypad_motor_en;
+
 extern volatile uint8_t tb_grind_en;       /* M1 grinder: 1 = run, 0 = stop     */
 extern volatile uint8_t tb_grind_rev;      /* M1 start direction (0 fwd, 1 rev)  */
 extern volatile uint8_t tb_grind_spd_req;  /* M1 speed-step request (self-clears)*/
@@ -128,13 +105,13 @@ extern volatile uint8_t tb_stir_rev;       /* M2 start direction (0 fwd, 1 rev) 
 extern volatile uint8_t tb_stir_spd_req;   /* M2 speed-step request (self-clears)*/
 
 /* ---- Lifecycle ------------------------------------------------------------ */
-/* Bring up U9 (all inputs) and U8 (all outputs, all LEDs lit), seed debounce,
- * and reset both motors' speed ladder to the start duty. Call once, after
- * MX_I2C1_Init() and TB_DRV8306_Init(). */
+/* Seed the debugger views and the debug-enable edge state. No bus traffic -
+ * call once, AFTER Keypad_Init() and TB_DRV8306_Init(). */
 void TB_TCA9554_Init(void);
 
-/* One service cycle: read U9, debounce, run button actions on fresh presses,
- * reflect held keys onto U8 (held -> its LED off). Call every poll (~1 ms). */
+/* One service cycle: consume this cycle's keypad press events and run the bound
+ * motor action, then refresh the debugger views. Call every poll (~1 ms), after
+ * Keypad_Tick(). */
 void TB_TCA9554_Poll(void);
 
 #ifdef __cplusplus

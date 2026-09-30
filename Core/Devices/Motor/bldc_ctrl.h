@@ -20,9 +20,10 @@ extern "C" {
  *
  *   g_grind_ctrl : M1 / U11, JK60BLS03 grinder, DIRECT drive (gear_ratio = 1),
  *                  so "output RPM" == motor RPM. Ladder in MOTOR RPM.
- *   g_stir_ctrl  : M2 / U16, JK42BLS02 stirrer behind a 1:49 planetary gearbox
- *                  (rated 4.4 N-m / 65 RPM output). Ladder in OUTPUT RPM; the
- *                  gearbox conversion is handled inside the DRV8306 layer.
+ *   g_stir_ctrl  : M2 / U16, JK42BLS02 stirrer: 1:82 gearbox -> x1.2 gear ->
+ *                  **blade**. Ladder / target / measured are in **BLADE RPM**
+ *                  (★2026-09-21 §0.22 — 전에는 1:49 가정의 "출력 rpm" 이었고
+ *                  지령 30 이 실제 날개 20 이었다). Conversion is in DRV8306.
  *
  * UNITS GOTCHA: the PI error is in whatever unit the ladder/target uses -- for
  * M1 that is MOTOR RPM (0..2500), for M2 OUTPUT RPM (0..40). That is why the two
@@ -96,7 +97,7 @@ typedef struct
 
 /* Live controller state. The `volatile` members are the debugger view:
  * target_out_rpm / reverse are the command (writable), the rest are read-only
- * status. For M1 (gear 1) *_out_rpm are motor RPM; for M2 they are output RPM. */
+ * status. For M1 (gear 1) *_out_rpm are motor RPM; for M2 they are BLADE RPM. */
 typedef struct
 {
 	const BldcCtrl_Cfg_t *cfg;        /* bound at definition time            */
@@ -118,11 +119,19 @@ typedef struct
 	volatile uint8_t  state;          /* bldc_state_t (RO)                   */
 	volatile uint8_t  fault;          /* latched nFAULT (RO)                 */
 	volatile uint8_t  retry_cnt;      /* unjam attempts so far (RO)          */
+
+	/* ★R3 개정4 C088~C090 [2026-09-21] — 회전수 운전(rotation.c) 입력용 관측.
+	 * BldcCtrl_Tick() 이 **매 호출**(주기 게이트 앞) 갱신한다. 설명은 아래 API 주석. */
+	volatile uint32_t position;       /* FG엣지 × DIR핀 부호 누적, uint32 모듈러 (RO) */
+	volatile uint16_t rest_ms;        /* at_rest 판정: FG 무펄스 연속 시간 (기본 BLDC_REST_MS) */
+	uint32_t pos_fg_last;             /* position 누적용 FG 직전값           */
+	uint32_t fg_move_ms;              /* FG 가 마지막으로 바뀐 tick          */
+	uint8_t  dir_ccw;                 /* 지금 DIR 핀에 걸린 방향(UNJAM 포함) */
 } BldcCtrl_t;
 
 /* The two board motors as closed-loop controllers (defined in bldc_ctrl.c). */
 extern BldcCtrl_t g_grind_ctrl;       /* M1 / U11 grinder (direct drive)     */
-extern BldcCtrl_t g_stir_ctrl;        /* M2 / U16 stirrer (1:49 geared)      */
+extern BldcCtrl_t g_stir_ctrl;        /* M2 / U16 stirrer (blade RPM, §0.22) */
 
 /* ---- API ------------------------------------------------------------------
  * The motor handle (c->cfg->h) must already be brought up by DRV8306_InitAll();
@@ -158,6 +167,45 @@ void    BldcCtrl_BrakeRelease(BldcCtrl_t *c); /* release brake -> normal Stop() 
 
 /* 1 = motor currently spinning (RUN or UNJAM); mirrors c->running. */
 uint8_t BldcCtrl_IsRunning(const BldcCtrl_t *c);
+
+/* ---- ★R3 개정4 회전수 운전 관측 (C088~C090, 검토서 §17.5·§17.6) -----------
+ * rotation.c 의 zg_rotation_input 중 stir_position_ticks · stir_at_rest ·
+ * grind_at_rest 의 **원천**이다. 벤더 port_contract rotation_contract 를 따른다.
+ *
+ * BldcCtrl_Position() — FG 하강엣지를 **지금 DIR 핀에 걸린 방향** 부호로 누적한다.
+ *   uint32 모듈러(계약: "uint32_t modulo counter"). UNJAM 역회전도 실제 방향으로 센다.
+ *   정지 명령 뒤 관성 회전은 마지막으로 건 방향으로 센다.
+ *   ⚠ **부호는 DIR 핀 기준이다**: DRV8306_DIR_CW 일 때 +. 이것이 계약의
+ *     "위에서 볼 때 시계방향 = +" 와 같은지는 **N14 미확인**이다 — 그 변환은
+ *     호출부(rotation 어댑터) 한 곳에서 한다. 여기서 부호를 뒤집지 말 것.
+ *   M2 는 날개 1회전 = FG 822 (P54, run G 실측, 구현현황 §0.22).
+ *
+ * BldcCtrl_IsAtRest() — 계약: "STOP 명령이나 고정 true 가 아니라 **실제 정지 관측**".
+ *   running == 0 이고 FG 가 rest_ms 동안 한 번도 안 바뀌었으면 1.
+ *   rest_ms 300 에서 FG 공백 = 모터 ≈17rpm 이하(날개 ≈0.25rpm) — 사실상 정지.
+ *   ⚠ **드라이버가 깨어 있을 때만 관측이다** [2026-09-21 run F 에서 발견, 구현현황 §0.25].
+ *     FGOUT 풀업(M1 R43 / M2 R62 10k)이 DRV8306 내부 LDO **DVDD** 에 물려 있어, 슬립
+ *     (BldcCtrl_Stop 의 ENABLE LOW)에서는 DVDD 가 꺼져 **관성 회전 중에도 FG 가 안 나온다**.
+ *     그 상태의 IsAtRest 는 "정지 명령 후 rest_ms 지남" 과 같다(계약 위반). position 도
+ *     관성분을 놓친다. → 회전수 운전의 정지는 **BldcCtrl_CoastAwake()** 로 할 것.
+ *
+ * BldcCtrl_Tick() 이 불리지 않는 모드(강음·배수 스텁 등)에서는 갱신되지 않는다.
+ * 재개 첫 호출에서 FG 가 바뀌어 있으면 "방금 움직임" 으로 보므로 at_rest 는 보수적
+ * (늦게 1)이다. */
+#ifndef BLDC_REST_MS
+#define BLDC_REST_MS   300U   /* TBD: N15 — tb_rotation_rest_wait_ms 실측 후 확정 */
+#endif
+uint32_t BldcCtrl_Position(const BldcCtrl_t *c);
+uint8_t  BldcCtrl_IsAtRest(const BldcCtrl_t *c, uint32_t now_ms);
+
+/* ★R3 개정4 C089 [2026-09-21, §0.25] — 회전수 운전 **운전 사이 정지 전용**.
+ * duty 0 으로 구동만 끊고 **드라이버는 깨운 채**(ENABLE HIGH, nBRAKE HIGH) 둔다 → DVDD 가
+ * 살아 FG 가 관성 회전을 계속 보고하므로 IsAtRest()·Position() 이 **실제 관측**이 된다.
+ * 상태는 Stop() 과 같다(running 0, IDLE, 소프트락 해제, PI 리셋) — 다음 Start() 로 재기동.
+ * 1x PWM 모드에서 duty 0 이 순수 관성인지 동기정류 제동에 가까운지는 DRV8306 MODE 스트랩에
+ * 따른다(어느 쪽이든 정지로 간다). **운전을 끝낼 때는 반드시 Stop() 으로 재워라** —
+ * 이 함수는 드라이버를 깨운 채 남긴다. 정지(jungji)·비상정지는 이 함수를 쓰지 않는다. */
+void     BldcCtrl_CoastAwake(BldcCtrl_t *c);
 
 /* ---- 폴트 래치 해제 -------------------------------------------------------
  * nFAULT 는 DRV8306 쪽에서 래치된다(h->fault, EXTI 하강에지). BldcCtrl_Stop() 은

@@ -5,11 +5,11 @@
 
 /* ---- Speed ladders -------------------------------------------------------
  * M1 (grinder) is direct drive, so its ladder is in MOTOR RPM. M2 (stirrer)
- * runs behind a 1:49 gearbox, so its ladder is in OUTPUT-shaft RPM (the DRV8306
+ * runs behind a 1:82 gearbox + x1.2 gear, so its ladder is in BLADE RPM (§0.22, the DRV8306
  * layer converts to motor RPM via gear_ratio). Each SW7/SW8 press advances one
  * rung and wraps; every start begins at rung 0. */
 static const uint16_t GRIND_LADDER[] = { 800U, 1200U, 1600U, 2000U, 2500U }; /* motor RPM  */
-static const uint16_t STIR_LADDER[]  = {  20U,   25U,   30U,   35U,   40U }; /* output RPM */
+static const uint16_t STIR_LADDER[]  = {  20U,   25U,   30U,   35U,   40U }; /* BLADE RPM (§0.22) */
 
 /* ---- Per-motor configuration ---------------------------------------------
  * PI gains are conservative starting points -- TRIM ON THE BENCH against
@@ -50,7 +50,7 @@ static const BldcCtrl_Cfg_t stir_cfg =
 	.duty_min_pm = 30, .duty_max_pm = 1000,
 	.stall_pct   = 60U, .duty_sat_pm = 980, .stall_ms = 800U,
 	.unjam_ms    = 700U, .unjam_pm = 600, .retry_max = 4U,
-	.slew_rpm_per_s = 20U,                 /* 0->40 rpm in ~2 s (output rpm)   */
+	.slew_rpm_per_s = 20U,                 /* 0->40 rpm in ~2 s (blade rpm)    */
 	.period_ms   = 100U, .wake_mask_ms = 50U,
 };
 
@@ -63,6 +63,20 @@ static void bldc_set_dir(BldcCtrl_t *c, uint8_t reverse)
 {
 	DRV8306_SetDirection(c->cfg->h,
 	                     reverse ? DRV8306_DIR_CCW : DRV8306_DIR_CW);
+	c->dir_ccw = reverse ? 1U : 0U;   /* ★C088: position 부호 = 실제로 건 방향 */
+}
+
+/* ★R3 개정4 C088·C089 — position 누적 + 마지막 움직임 시각. 매 Tick 호출. */
+static void bldc_track_motion(BldcCtrl_t *c, uint32_t now_ms)
+{
+	uint32_t fg = c->cfg->h->fg_edges;          /* ISR 증가, 32bit 원자 읽기 */
+	uint32_t d  = fg - c->pos_fg_last;           /* uint32 모듈러             */
+	if (d != 0U)
+	{
+		c->pos_fg_last = fg;
+		c->fg_move_ms  = now_ms;
+		if (c->dir_ccw) { c->position -= d; } else { c->position += d; }
+	}
 }
 
 static void bldc_pi_reset(BldcCtrl_t *c)
@@ -94,6 +108,13 @@ void BldcCtrl_Init(BldcCtrl_t *c)
 	c->stall_since = 0U;
 	c->last_tick   = HAL_GetTick();
 	bldc_pi_reset(c);
+
+	/* ★C088·C089: 위치·정지 관측 초기화 */
+	c->position    = 0U;
+	c->rest_ms     = (uint16_t)BLDC_REST_MS;
+	c->pos_fg_last = k->h->fg_edges;
+	c->fg_move_ms  = c->last_tick;
+	c->dir_ccw     = 0U;
 
 	/* The motor itself is left parked/disabled by DRV8306_InitAll(). */
 }
@@ -214,6 +235,32 @@ uint8_t BldcCtrl_IsRunning(const BldcCtrl_t *c)
 	return c->running;
 }
 
+uint32_t BldcCtrl_Position(const BldcCtrl_t *c)
+{
+	return c->position;
+}
+
+uint8_t BldcCtrl_IsAtRest(const BldcCtrl_t *c, uint32_t now_ms)
+{
+	return (uint8_t)(!c->running && ((now_ms - c->fg_move_ms) >= (uint32_t)c->rest_ms));
+}
+
+void BldcCtrl_CoastAwake(BldcCtrl_t *c)
+{
+	const BldcCtrl_Cfg_t *k = c->cfg;
+
+	/* ENABLE·nBRAKE 는 건드리지 않는다 — 구동 중이었다면 이미 HIGH 다. duty 만 0. */
+	DRV8306_SetDutyPerMille(k->h, 0U);
+	c->running        = 0U;
+	c->target_out_rpm = k->ladder[c->spd_idx];   /* Stop() 과 같은 규칙 */
+	c->sp_out_rpm     = 0U;
+	c->retry_cnt      = 0U;
+	c->duty_pm        = 0;
+	c->stall_active   = 0U;
+	c->state          = (uint8_t)BLDC_IDLE;
+	bldc_pi_reset(c);
+}
+
 /* ---- Control tick -------------------------------------------------------- */
 void BldcCtrl_Tick(BldcCtrl_t *c, uint32_t now_ms)
 {
@@ -221,6 +268,8 @@ void BldcCtrl_Tick(BldcCtrl_t *c, uint32_t now_ms)
 	DRV8306_HandleTypeDef *h = k->h;
 	uint32_t dt;
 	uint8_t  faulted;
+
+	bldc_track_motion(c, now_ms);   /* ★C088·C089: 주기 게이트 앞, 매 호출 */
 
 	/* --- nFAULT handling runs EVERY call, BEFORE the control-period gate. Two
 	 * reasons it must not be gated behind the 100 ms period: (1) the wake window

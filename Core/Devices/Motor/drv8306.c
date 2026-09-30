@@ -15,7 +15,10 @@ DRV8306_HandleTypeDef drv8306_m1 =
 	.fgout_port  = exti15_M1_FGOT_GPIO_Port,   .fgout_pin  = exti15_M1_FGOT_Pin,   /* PF15 */
 	.pole_pairs  = DRV8306_DEFAULT_POLE_PAIRS,
 	.gear_ratio  = DRV8306_M1_GEAR_RATIO,      /* direct drive           */
+	.stage_num   = DRV8306_M1_STAGE_NUM,       /* no final stage         */
+	.stage_den   = DRV8306_M1_STAGE_DEN,
 	.noload_rpm  = DRV8306_MOTOR_NOLOAD_RPM,   /* JK60BLS03: 4000 RPM    */
+	.ff_offset_pm = DRV8306_M1_FF_OFFSET_PM,   /* 0 - unchanged          */
 };
 
 DRV8306_HandleTypeDef drv8306_m2 =
@@ -28,8 +31,11 @@ DRV8306_HandleTypeDef drv8306_m2 =
 	.nfault_port = exti13_M2_nFAULT_GPIO_Port, .nfault_pin = exti13_M2_nFAULT_Pin, /* PF13 */
 	.fgout_port  = exti12_M2_FGOT_GPIO_Port,   .fgout_pin  = exti12_M2_FGOT_Pin,   /* PF12 */
 	.pole_pairs  = DRV8306_DEFAULT_POLE_PAIRS,
-	.gear_ratio  = DRV8306_M2_GEAR_RATIO,      /* 1:49 planetary gearbox */
+	.gear_ratio  = DRV8306_M2_GEAR_RATIO,      /* 1:82 planetary gearbox (§0.22) */
+	.stage_num   = DRV8306_M2_STAGE_NUM,       /* x1.2 step-up to blade (6/5)    */
+	.stage_den   = DRV8306_M2_STAGE_DEN,
 	.noload_rpm  = DRV8306_M2_NOLOAD_RPM,      /* JK42BLS02: 5000 RPM    */
+	.ff_offset_pm = DRV8306_M2_FF_OFFSET_PM,   /* 38 permille (§0.22.5)  */
 };
 
 static uint32_t DRV8306_DutyTicks(const DRV8306_HandleTypeDef *h, uint8_t duty_pct)
@@ -193,8 +199,19 @@ int16_t DRV8306_FeedForwardPerMille(const DRV8306_HandleTypeDef *h,
                                     uint16_t out_rpm)
 {
 	uint32_t gear   = (h->gear_ratio != 0U) ? h->gear_ratio : 1U;
+	uint32_t num    = (h->stage_num  != 0U) ? h->stage_num  : 1U;
+	uint32_t den    = (h->stage_den  != 0U) ? h->stage_den  : 1U;
 	uint32_t noload = (h->noload_rpm != 0U) ? h->noload_rpm : DRV8306_MAX_RPM;
-	uint32_t pm     = ((uint32_t)out_rpm * gear * 1000U) / noload;
+	/* motor_rpm = out x gear x den / num  (M2: blade x 82 x 5 / 6).
+	 * 최대 40 x 82 x 5 x 1000 = 16.4e6 - uint32 안전. */
+	uint32_t pm     = ((uint32_t)out_rpm * gear * den * 1000U) / (num * noload);
+
+	/* §0.22.5: 마찰·무부하 전류분 상수. 목표 0 이면 더하지 않는다 - 정지 지령과
+	 * 램프 시작점(BldcCtrl_Start 의 sp=0 시드)이 0‰ 로 남아 소프트스타트가 유지된다. */
+	if (out_rpm != 0U)
+	{
+		pm += h->ff_offset_pm;
+	}
 
 	if (pm > 1000U)
 	{
@@ -205,9 +222,12 @@ int16_t DRV8306_FeedForwardPerMille(const DRV8306_HandleTypeDef *h,
 
 uint16_t DRV8306_MeasuredOutputRPM(DRV8306_HandleTypeDef *h, uint32_t window_ms)
 {
-	uint16_t motor = DRV8306_MeasuredRPM(h, window_ms);
-	uint16_t gear  = (h->gear_ratio != 0U) ? h->gear_ratio : 1U;
-	return (uint16_t)(motor / gear);
+	uint32_t motor = DRV8306_MeasuredRPM(h, window_ms);
+	uint32_t gear  = (h->gear_ratio != 0U) ? h->gear_ratio : 1U;
+	uint32_t num   = (h->stage_num  != 0U) ? h->stage_num  : 1U;
+	uint32_t den   = (h->stage_den  != 0U) ? h->stage_den  : 1U;
+	/* out = motor x num / (gear x den)  (M2: motor x 6 / 410 = 날개 rpm) */
+	return (uint16_t)((motor * num) / (gear * den));
 }
 
 void DRV8306_PI_Init(DRV8306_PI_t *pi,

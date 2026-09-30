@@ -10,9 +10,13 @@ extern "C" {
 /* NTC thermistors x3 -- HCET-103F3950 (Nanjing Haichuan), 10k @ 25C, B3950.
  *
  * Hardware (schematic nets THERMISTER1/2/3, U21 pins 26/27/28):
- *   THERMISTER1  PC0 = ADC1_IN10   (connector J19)
+ *   THERMISTER1  PC0 = ADC1_IN10   (connector J21)
  *   THERMISTER2  PC1 = ADC1_IN11   (connector J22)
- *   THERMISTER3  PC2 = ADC1_IN12   (connector J26)
+ *   THERMISTER3  PC2 = ADC1_IN12   (connector J23)
+ * ★R3 C074(검토서 §8-⑤): 위 커넥터 번호는 J19/J22/J26 으로 잘못 적혀 있었다.
+ * REV02 넷리스트 실측 — THERM1: R106 -> NetC93_2 -> **J21-1**, THERM2: R108 ->
+ * NetC95_2 -> **J22-1**, THERM3: R110 -> NetC97_2 -> **J23-1**. (J26 은 마개 홀.)
+ * 분압은 각 채널 1K(하단) + 10K(상단, R107/R109/R111). 동작 영향 없는 주석 정정.
  *
  * Divider per channel (net 3P3V-MCU = 3.3V). Rfixed is bench-confirmed 10k
  * (R107/R111/R109), NOT the 1k an earlier BOM read suggested:

@@ -51,23 +51,33 @@ extern "C" {
  * 배출문을 움직이도록 여기 한 곳에만 둔다. 배수문과 달리 열림/닫힘 동작이 같다:
  *
  *   TDOOR_DUTY(80 %) 고정으로 구동하고, 구동 방향의 THALL이 인식되어도 즉시
- *   서지 않고 TDOOR_OVERRUN_MS(1 s)만큼 **더 돌아 자석을 지난 뒤** 정지한다.
+ *   추가회전 시간만큼 **더 돌아 자석을 지난 뒤** 정지한다 — 닫힘
+ *   TDOOR_CLOSE_OVERRUN_MS(2.8 s). 열림은 TDOOR_OPEN_OVERRUN_MS(200 ms) 뒤
+ *   정지한다(사실상 THALL-OPEN 에서 멈춤).
  *   THALL이 끝내 인식되지 않을 때를 위한 상한이 방향별로 있다
- *   (TDOOR_OPEN_MAX_MS / TDOOR_CLOSE_MAX_MS, 둘 다 14.3 s). 상한은 구동 전체의
+ *   (TDOOR_OPEN_MAX_MS / TDOOR_CLOSE_MAX_MS, 둘 다 20 s — 2026-09-22 14.3 s→20 s 사용자 지시). 상한은 구동 전체의
  *   하드 상한이라, 상한 직전에 인식되면 추가회전이 상한에서 잘린다.
  *
  * 경과시간은 그 방향으로 구동을 시작한 시점부터 잰다. */
 #ifndef TDOOR_DUTY
 #define TDOOR_DUTY            80U
 #endif
-#ifndef TDOOR_OVERRUN_MS
-#define TDOOR_OVERRUN_MS      1000U
+/* THALL 인식 후 추가회전. 이력(사용자 지시): 공통 1 s → 2026-09-22 닫힘 1.5 s(실기 확인)
+ * → 2026-09-22 닫힘 1.8 s · 열림 0 s → 2026-09-22 열림 50 ms(실기 ✅)
+ * → 2026-09-22 닫힘 2.0 s · 열림 200 ms → 2026-09-22 닫힘 2.5 s → 2026-09-22 **닫힘 2.8 s**.
+ * 기산점은 THALL 을 **처음 본 시각**이다(벤치의 5 ms 확인 지연을 빼고 센다 — tb_drv8871.c).
+ * 종전 공통 상수 TDOOR_OVERRUN_MS 는 방향별로 나누면서 없앴다. */
+#ifndef TDOOR_OPEN_OVERRUN_MS
+#define TDOOR_OPEN_OVERRUN_MS  200U      /* 2026-09-22: 1000 -> 0 -> 50 -> 200 (사용자 지시) */
+#endif
+#ifndef TDOOR_CLOSE_OVERRUN_MS
+#define TDOOR_CLOSE_OVERRUN_MS 2800U     /* 2026-09-22: 1000 -> 1500 -> 1800 -> 2000 -> 2500 -> 2800 (사용자 지시) */
 #endif
 #ifndef TDOOR_OPEN_MAX_MS
-#define TDOOR_OPEN_MAX_MS     14300U
+#define TDOOR_OPEN_MAX_MS     20000U    /* 2026-09-22: 14300 -> 20000 (사용자 지시) */
 #endif
 #ifndef TDOOR_CLOSE_MAX_MS
-#define TDOOR_CLOSE_MAX_MS    14300U
+#define TDOOR_CLOSE_MAX_MS    20000U    /* 2026-09-22: 14300 -> 20000 (사용자 지시) */
 #endif
 
 void TDoor_Init(void);

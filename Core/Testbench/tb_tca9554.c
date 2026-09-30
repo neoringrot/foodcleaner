@@ -1,14 +1,13 @@
 #include "tb_tca9554.h"
 
-#include "tca9554.h"
+#include "keypad.h"       /* U31/U32 owner: debounce, press/long events, LEDs */
 #include "bldc_ctrl.h"    /* M1 g_grind_ctrl / M2 g_stir_ctrl closed-loop control */
-#include "i2c.h"          /* hi2c1 */
 
-/* Front-panel keypad (U9) -> BLDC motor testbed. See tb_tca9554.h for the wiring,
- * the LED behaviour, the button->motor map and the single-owner note for U8/U9
- * (the generic membrane driver is gone). Both motors are driven CLOSED-LOOP through
- * bldc_ctrl (M1 = g_grind_ctrl, M2 = g_stir_ctrl); this file only maps button
- * edges to BldcCtrl_Start/Stop/SpeedStep. */
+/* Front-panel keypad -> BLDC motor testbed. Since REV02 this file does NO bus
+ * traffic of its own: Devices/ExtGpio/keypad.* owns U31(SW)/U32(LED), and this
+ * testbed only consumes its press events. See tb_tca9554.h. Both motors are
+ * driven CLOSED-LOOP through bldc_ctrl (M1 = g_grind_ctrl, M2 = g_stir_ctrl);
+ * this file only maps button edges to BldcCtrl_Start/Stop/SpeedStep. */
 
 /* ---- Public state --------------------------------------------------------- */
 volatile tb_tca9554_btn_t tb_btn[TB_TCA9554_BTN_COUNT];
@@ -17,6 +16,7 @@ volatile uint8_t          tb_led_mask;   /* current lit-LED mask   */
 
 /* Debug enable (testbench only): keypad-free start/stop of the two motors.
  * See tb_tca9554.h for the contract. */
+volatile uint8_t tb_keypad_motor_en = 1U;   /* 0 = 버튼 눌러도 모터 안 돌린다 */
 volatile uint8_t tb_grind_en;
 volatile uint8_t tb_grind_rev;
 volatile uint8_t tb_grind_spd_req;
@@ -25,43 +25,11 @@ volatile uint8_t tb_stir_rev;
 volatile uint8_t tb_stir_spd_req;
 
 /* ---- Private state -------------------------------------------------------- */
-static tca9554_t s_sw;    /* U9 - DIS-SW inputs   */
-static tca9554_t s_led;   /* U8 - DIS-LED outputs */
-
-/* Debounce, per key (P0..P7 of U9). */
-static uint8_t s_cand[TB_TCA9554_BTN_COUNT];   /* candidate level being counted */
-static uint8_t s_cnt[TB_TCA9554_BTN_COUNT];    /* consecutive-sample counter    */
-
 /* Previous tb_*_en level, for edge detection of the debug-enable inputs. */
 static uint8_t s_grind_en_prev;
 static uint8_t s_stir_en_prev;
 
 /* ---- Small helpers -------------------------------------------------------- */
-
-/* Translate the lit-LED mask into the raw U8 output-port value, honouring the
- * LED active level. Default (active-high): lit bit -> 1. */
-static uint8_t led_mask_to_port(uint8_t lit_mask)
-{
-#if TB_TCA9554_LED_ACTIVE_HIGH
-	return lit_mask;
-#else
-	return (uint8_t)~lit_mask;
-#endif
-}
-
-/* Read U9 and return the *logical pressed* mask (bit set = key pressed). With
- * TB_TCA9554_SW_ACTIVE_HIGH==0 the expander's polarity-inversion register
- * already flips the bits, so the raw input reads 1 on press either way. */
-static HAL_StatusTypeDef read_pressed(uint8_t *pressed)
-{
-	uint8_t raw;
-	HAL_StatusTypeDef st = TCA9554_ReadInput(&s_sw, &raw);
-	if (st != HAL_OK)
-		return st;
-
-	*pressed = raw;
-	return HAL_OK;
-}
 
 /* Run the action bound to a fresh press of SW(index+1). Odd buttons drive M1
  * (grinder, g_grind_ctrl), even buttons drive M2 (stirrer, g_stir_ctrl); both
@@ -133,43 +101,22 @@ static void apply_enable(BldcCtrl_t *c, volatile uint8_t *en, uint8_t *en_prev,
 /* ---- Lifecycle ------------------------------------------------------------ */
 void TB_TCA9554_Init(void)
 {
-	uint8_t seed = 0x00U;
 	uint8_t i;
 
-	tb_btn_mask = 0x00U;
-	tb_led_mask = 0xFFU;                     /* all LEDs lit by default */
-
-	/* LEDs -> 0x38 (TCA9554_U9_ADDR, netlist "U9"): all outputs, all LEDs lit.
-	 * (Bench-confirmed swap vs netlist; see tb_tca9554.h header.) */
-	(void)TCA9554_Init(&s_led, &hi2c1, TCA9554_U9_ADDR,
-	                   TCA9554_ALL_OUTPUTS, led_mask_to_port(tb_led_mask));
-
-	/* Keypad -> 0x39 (TCA9554_U8_ADDR, netlist "U8"): all inputs. */
-	(void)TCA9554_Init(&s_sw, &hi2c1, TCA9554_U8_ADDR,
-	                   TCA9554_ALL_INPUTS, 0x00U);
-
-#if !TB_TCA9554_SW_ACTIVE_HIGH
-	/* Active-low keypad: invert input readings in hardware so a press reads 1. */
-	(void)TCA9554_SetPolarity(&s_sw, 0xFFU);
-#endif
-
-	/* Seed debounce from the current state so a key held at boot does not fire a
-	 * spurious edge on the first poll. */
-	if (read_pressed(&seed) != HAL_OK)
-		seed = 0x00U;
+	/* U31/U32 are brought up by Keypad_Init() (called first in StartMotorTask);
+	 * nothing here touches the bus. Mirror the driver's current snapshot so the
+	 * debugger views are valid before the first Poll. */
+	tb_btn_mask = Keypad_GetMask();
+	tb_led_mask = Keypad_GetLedMask();
 
 	/* Seed debug-enable edge state to the current levels so a variable left set
 	 * from a previous run does not fire a spurious Start/Stop on the first poll. */
 	s_grind_en_prev = tb_grind_en ? 1U : 0U;
-	s_stir_en_prev  = tb_stir_en ? 1U : 0U;
+	s_stir_en_prev  = tb_stir_en  ? 1U : 0U;
 
-	tb_btn_mask = seed;
 	for (i = 0; i < TB_TCA9554_BTN_COUNT; i++)
 	{
-		uint8_t level = (uint8_t)((seed >> i) & 1U);
-		s_cand[i]        = level;
-		s_cnt[i]         = TB_TCA9554_DEBOUNCE_SAMPLES;
-		tb_btn[i].pressed   = level;
+		tb_btn[i].pressed   = Keypad_IsPressed(i);
 		tb_btn[i].edge      = 0U;
 		tb_btn[i].press_cnt = 0U;
 	}
@@ -181,70 +128,32 @@ void TB_TCA9554_Init(void)
 
 void TB_TCA9554_Poll(void)
 {
-	uint8_t sample = 0x00U;
 	uint8_t i;
-	uint8_t led_changed = 0U;
 
-	/* Debug-enable inputs (testbench only): drive the motors without the keypad.
-	 * Runs before the bus read so a bus hiccup below does not skip it. */
+	/* Debug-enable inputs (testbench only): drive the motors without the keypad. */
 	apply_enable(&g_grind_ctrl, &tb_grind_en, &s_grind_en_prev,
 	             &tb_grind_rev, &tb_grind_spd_req);
 	apply_enable(&g_stir_ctrl,  &tb_stir_en,  &s_stir_en_prev,
 	             &tb_stir_rev,  &tb_stir_spd_req);
 
-	if (read_pressed(&sample) != HAL_OK)
-		return;                              /* bus hiccup: skip this cycle */
-
+	/* Consume the keypad driver's debounced press events. Keypad_Tick() already
+	 * ran this cycle (StartMotorTask, before the mode switch), so a press taken
+	 * here acts before the BldcCtrl_Tick calls that follow. */
 	for (i = 0; i < TB_TCA9554_BTN_COUNT; i++)
 	{
-		uint8_t level = (uint8_t)((sample >> i) & 1U);
-		uint8_t prev  = (uint8_t)((tb_btn_mask >> i) & 1U);
+		tb_btn[i].pressed = Keypad_IsPressed(i);
+		tb_btn[i].edge    = Keypad_TakePress(i);
 
-		tb_btn[i].edge = 0U;                 /* one-poll pulse; clear each cycle */
-
-		/* Debounce: require the same reading for N consecutive polls. */
-		if (level != s_cand[i])
+		if (tb_btn[i].edge)
 		{
-			s_cand[i] = level;
-			s_cnt[i]  = 1U;
-			continue;
-		}
-		if (s_cnt[i] < TB_TCA9554_DEBOUNCE_SAMPLES)
-		{
-			s_cnt[i]++;
-			if (s_cnt[i] < TB_TCA9554_DEBOUNCE_SAMPLES)
-				continue;                    /* not yet stable */
-		}
-		else
-		{
-			continue;                        /* already accepted at this level */
-		}
-
-		/* Debounced level just became stable; commit it. */
-		if (level)
-			tb_btn_mask |= (uint8_t)(1U << i);
-		else
-			tb_btn_mask &= (uint8_t)~(1U << i);
-		tb_btn[i].pressed = level;
-
-		/* Rising edge (release -> press): run the bound action once. */
-		if (level && !prev)
-		{
-			tb_btn[i].edge = 1U;
 			tb_btn[i].press_cnt++;
-			handle_press(i);
+			if (tb_keypad_motor_en)
+				handle_press(i);   /* 0 이면 관측만 - 채널 대응 확인용 */
 		}
 	}
 
-	/* LED = lit unless its key is held. Recompute and write U8 only on change. */
-	{
-		uint8_t new_led = (uint8_t)~tb_btn_mask;   /* held bit -> LED off */
-		if (new_led != tb_led_mask)
-		{
-			tb_led_mask = new_led;
-			led_changed = 1U;
-		}
-	}
-	if (led_changed)
-		(void)TCA9554_WriteOutput(&s_led, led_mask_to_port(tb_led_mask));
+	/* Debugger views; the LED latch itself is owned by keypad.c
+	 * (KEYPAD_LED_FOLLOW_PRESS: lit unless its key is held). */
+	tb_btn_mask = Keypad_GetMask();
+	tb_led_mask = Keypad_GetLedMask();
 }

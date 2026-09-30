@@ -146,7 +146,21 @@ typedef enum
 
 	/* 설정 / 제어 */
 	PROTO_CMD_MON_CFG    = 0x30,  /* R/W : 모니터링 마스크 + 주기            */
-	PROTO_CMD_CONTROL    = 0x31   /* R/W : 시나리오 시작·정지 (아래 §8)      */
+	PROTO_CMD_CONTROL    = 0x31,  /* R/W : 시나리오 시작·정지 (아래 §8)      */
+
+#if ENABLE_TESTBENCH_APP
+	/* 테스트벤치 원격검증(PC 앱 src/parts_verification). main.h 의
+	 * ENABLE_TESTBENCH_APP 가 0 이면 이 두 CMD 는 존재하지 않는다 - 앱이 보내면
+	 * PROTO_NAK_UNKNOWN_CMD 로 거절된다. 페이로드는 아래 §9. */
+	PROTO_CMD_TB_STATE   = 0x27,  /* R/M : 벤치 enable/방향/리미트/센서 전수  */
+	PROTO_CMD_TB_STATE2  = 0x28,  /* R/M : 회전엔진·헹굼패턴·음성·코덱검사 (§0.39) */
+	PROTO_CMD_TB_CTRL    = 0x33,  /* R/W : 벤치 항목 1개 쓰기 (item, value)  */
+#endif
+
+	/* W : 음성 이미지 다운로드 모드 진입. DATA[0] = 0x01 만 의미가 있다.
+	 * ACK 직후 UART5 소유권이 voiceupdater 로 넘어간다(voiceupdater.h).
+	 * 정식 기능이 아닌 1회성 정비용이라 앱은 쓰지 않는다 - PC 로더 전용. */
+	PROTO_CMD_VOICE_UPD  = 0x32   /* W   : 음성 다운로드 모드 진입          */
 } proto_cmd_t;
 
 /* NAK 사유(진단용, 회선에는 나가지 않는다 - g_proto.last_nak 로 관찰) */
@@ -157,7 +171,8 @@ typedef enum
 	PROTO_NAK_BAD_LEN,         /* LEN 이 그 CMD 의 규격과 다름               */
 	PROTO_NAK_BAD_VALUE,       /* 값 범위 위반                              */
 	PROTO_NAK_VERIFY_FAIL,     /* 써넣고 되읽은 값이 다름(§2 검증 실패)      */
-	PROTO_NAK_NOT_WRITABLE     /* R 전용 CMD 에 W 를 시도                    */
+	PROTO_NAK_NOT_WRITABLE,    /* R 전용 CMD 에 W 를 시도                    */
+	PROTO_NAK_BUSY             /* 지금은 받을 수 없는 상태(시나리오 운전 중) */
 } proto_nak_t;
 
 /* ==========================================================================
@@ -199,7 +214,9 @@ typedef enum
  *  8-9   i16 temp_vapor  수증기 제어 온도 d10 (THERM3/CH2)
  * 10     bin_fill_pct    수거통 채움 0..100
  * 11     hall_mask       HS1..HS8 (bit0..bit7)
- * 12     err_code        DjErrCode (동작 전용, 그 외 0)
+ * 12     err_code        DjErrCode. ★2026-09-22 앱 동기화: 모음 모드 = g_moeum.err_code, 동작 모드 =
+ *                        g_dongjak.err_code, 그 밖의 모드 = **래치형 에러가 남은 쪽**의 코드(없으면 0).
+ *                        래치형(E03·E04·E08·E09)은 모드를 떠나도 새 시작을 막으므로 앱이 봐야 한다(§0.33).
  * 13     jungji_src      JungjiSrc (마지막 정지 사유)
  * 14-15  u16 stop_count  누적 정지 실행 횟수
  * 16     mon_seq         ★"STATUS 를 M 으로 보낸 횟수" (0~255 순환). 유실 감지용.
@@ -221,24 +238,35 @@ typedef enum
 #define PROTO_ST_GRIND          0x40U   /* 분쇄 M1 회전 중(측정 RPM>0)       */
 #define PROTO_ST_STIR           0x80U   /* 교반 M2 회전 중(측정 RPM>0)       */
 
-/* ---- 0x21 MOEUM : N = 16 -----------------------------------------------
- *  0     state           MoeumState (0 IDLE .. 8 ERROR)
+/* ---- 0x21 MOEUM : N = 24 -----------------------------------------------
+ *  0     state           MoeumState (0 IDLE .. 8 ERROR, 9 PREP)
  *  1     flags           아래 PROTO_MO_* 비트
- *  2     stir_phase      MoeumStirPhase (0 CCW, 1 DELAY, 2 CW)
+ *  2     stir_phase      MoeumStirPhase (0 CCW, 1 DELAY, 2 CW, 3 DELAY2) — 회전수 운전 미러
  *  3     io_bits         아래 PROTO_MO_IO_* 비트
  *  4-7   u32 state_ms    현 상태 진입 후 경과 ms
  *  8-9   u16 stir_cycles 완료한 교반 사이클 수
  * 10-11  u16 stir_total  목표 사이클 수 (MOEUM_STIR_CYCLES) - 진행률 계산용
  * 12-13  u16 stir_rpm    교반 측정 출력축 RPM
  * 14-15  u16 run_s       모음 시작 후 경과 초
+ * ---- ★2026-09-22 추가(16→24). 앱은 16 바이트 옛 펌웨어도 계속 읽는다(뒤쪽 필드 선택) ----
+ * 16-17  u16 guide_cnt   가이드(HS6) 상승엣지 cnt — 20 배수 / 40 교반 정지 (rinse_lock)
+ * 18     lock_fault      RinseLockFault (0 OK / 1 WASH 미도달 / 2 DRAIN 미도달 / 3 과속), 래치
+ * 19     rinse_step      RinseStep (rinse.h: 8 CLOSE · 9 FILL · 10 WASH · 11 DRAIN_OPEN · 12 DRAIN …)
+ * 20-21  u16 t20_ds      회차 기산 → cnt 20 도달 (0.1 s, 0 = 미도달)
+ * 22-23  u16 t40_ds      회차 기산 → cnt 40 도달 (0.1 s, 0 = 미도달)
  */
-#define PROTO_LEN_MOEUM         16U
+#define PROTO_LEN_MOEUM         24U
 #define PROTO_MO_BUSY           0x01U
 #define PROTO_MO_START_REQ      0x02U
 #define PROTO_MO_WATER          0x04U
 #define PROTO_MO_ABORT_REQ      0x08U
 #define PROTO_MO_LID_GUARD      0x10U
 #define PROTO_MO_STIR_ACTIVE    0x20U
+/* ★2026-09-21 배수문 종료 사유(진단). 1 = 리미트 미인식, 시간 상한으로 끝났다.
+ * 0 은 '리미트로 끝남' 또는 '아직 안 끝남' — state 로 가른다(닫힘은 state>=2,
+ * 열림은 state>=6 이면 끝난 것). 회차 시작(state 1 진입)마다 0 으로 리셋. */
+#define PROTO_MO_WCLOSE_TMO     0x40U   /* 배수문 닫힘: 4.2s 시간초과로 종료 */
+#define PROTO_MO_WOPEN_TMO      0x80U   /* 배수문 열림: 6s 상한으로 종료     */
 #define PROTO_MO_IO_VALVE_IN    0x01U   /* VALVE-DRY-IN (PB13) 급수솔        */
 #define PROTO_MO_IO_WATER_ON    0x02U   /* WATER-ON (PE2) 급수 메인          */
 #define PROTO_MO_IO_DOOR_EN     0x04U   /* EN-DOOR-WATER (PE4) 배수문 VM     */
@@ -246,7 +274,7 @@ typedef enum
 #define PROTO_MO_IO_WHALL_CLOSE 0x10U   /* W-HALL-CLOSE 리미트 도달          */
 #define PROTO_MO_IO_DRAIN_CLN   0x20U   /* VALVE-DRAIN-CLN (PB14)            */
 
-/* ---- 0x22 DONGJAK : N = 28 ---------------------------------------------
+/* ---- 0x22 DONGJAK : N = 36 ---------------------------------------------
  *  0     state           DongjakState (0 IDLE, 1..12 헹굼, 13 HEAT, ...)
  *  1     flags           아래 PROTO_DJ_* 비트
  *  2     err_code        DjErrCode
@@ -255,7 +283,7 @@ typedef enum
  *  5     vapor_phase     DjVaporPhase
  *  6     disc_phase      DjDischPhase
  *  7     cool_phase      0 뜨거움 / 1 식음
- *  8-11  u32 run_ms      시나리오 시작 후 경과 ms (110/120/130/135분 마커 기준)
+ *  8-11  u32 run_ms      시나리오 시작 후 경과 ms (헹굼 포함. 110/120/130/135분 기준은 28-31 proc_ms)
  * 12-15  u32 state_ms    현 상태 진입 후 경과 ms
  * 16-17  i16 temp_d10    처리통 온도
  * 18-19  i16 vapor_d10   수증기 제어 온도 (THERM3)
@@ -264,8 +292,15 @@ typedef enum
  * 24     bin_fill_pct
  * 25     io_bits         아래 PROTO_DJ_IO_* 비트
  * 26-27  u16 cycle_count 처리 완료 누적 횟수
+ * ---- ★2026-09-22 앱 동기화 추가(28→36). 앱은 28 바이트 옛 펌웨어도 계속 읽는다(뒤쪽 필드 선택) ----
+ * 28-31  u32 proc_ms     공정 시계 = 최초 HT_POWER ON 이후 경과 ms (R3 C005, 0 = 히터 아직 안 켬).
+ *                        110/120/130/135분 판정의 실제 기준이다 — run_ms 는 헹굼 시간만큼 앞서 있다.
+ * 32     rinse_step      RinseStep (rinse.h: 1~7 준비 탐색 · 8 CLOSE · 9 FILL · 10 WASH · 11 DRAIN_OPEN · 12 DRAIN …)
+ *                        헹굼(DJ_PREP·DJ_RINSE*)·자가세척(DJ_SELFCLEAN, 21) 구간에서만 의미가 있다.
+ * 33     lock_fault      RinseLockFault (0 OK / 1 WASH 미도달 / 2 DRAIN 미도달 / 3 과속), 래치
+ * 34-35  u16 guide_cnt   가이드(HS6) 상승엣지 cnt — 20 배수 / 40 교반 정지 (rinse_lock)
  */
-#define PROTO_LEN_DONGJAK       28U
+#define PROTO_LEN_DONGJAK       36U
 #define PROTO_DJ_BUSY           0x01U
 #define PROTO_DJ_HEAT_STARTED   0x02U
 #define PROTO_DJ_TEMP_VALID     0x04U
@@ -273,7 +308,7 @@ typedef enum
 #define PROTO_DJ_ABORT_REQ      0x10U
 #define PROTO_DJ_LID_GUARD      0x20U
 #define PROTO_DJ_FAN_BLDC       0x40U   /* BLDC 식힘팬 ON (30/10s duty)      */
-#define PROTO_DJ_FAN_EXHAUST    0x80U   /* 배기팬 ON (15/2분 duty)           */
+#define PROTO_DJ_FAN_EXHAUST    0x80U   /* 배기팬 ON (R3 C056 10s/5s duty)    */
 #define PROTO_DJ_IO_HEATER      0x01U   /* HT-POWER (PA12)                   */
 #define PROTO_DJ_IO_VALVE_IN    0x02U   /* VALVE-DRY-IN (PB13)               */
 #define PROTO_DJ_IO_DRAIN_CLN   0x04U   /* VALVE-DRAIN-CLN (PB14)            */
@@ -300,14 +335,16 @@ typedef enum
  */
 #define PROTO_LEN_SENSOR        16U
 /* din1 - PF0~PF7 */
-#define PROTO_SEN1_BIMETAL_80   0x01U   /* PF0 80℃ 바이메탈                  */
-#define PROTO_SEN1_BIMETAL_60   0x02U   /* PF1 60℃ 바이메탈                  */
+#define PROTO_SEN1_BIMETAL_70   0x01U   /* PF0 70℃ 바이메탈 (REV02: was 80℃) — 원시 레벨. 0 = 70℃ 초과(락) */
+#define PROTO_SEN1_BIMETAL_50   0x02U   /* PF1 50℃ 바이메탈 (REV02: was 60℃) — 원시 레벨. 1 = 50℃ 초과(락) */
 #define PROTO_SEN1_THALL_CLOSE  0x04U   /* PF2 배출문 닫힘 홀                */
 #define PROTO_SEN1_WHALL_CLOSE  0x08U   /* PF3 배수문 닫힘 홀                */
 #define PROTO_SEN1_WHALL_OPEN   0x10U   /* PF4 배수문 열림 홀                */
 #define PROTO_SEN1_THALL_OPEN   0x20U   /* PF5 배출문 열림 홀                */
 #define PROTO_SEN1_WATER_SEN1   0x40U   /* PF6 수위센서1                     */
-#define PROTO_SEN1_WATER_SEN2   0x80U   /* PF7 수위센서2                     */
+/* ★REV02: PF7 은 수위센서2가 아니라 J16 가이드 홀이다. 비트 위치는 유지하되 의미가
+ *   바뀌었으므로 앱(enums.py)은 8단계 일괄 동기화에서 함께 고친다. 수위는 PF6 단독. */
+#define PROTO_SEN1_NEW_HALL_INT 0x80U   /* PF7 REV02 가이드 홀 (was 수위센서2) */
 /* din2 - PF8~PF15 + BLE */
 #define PROTO_SEN2_TIMER_OUT    0x01U   /* PF8  배출 HW 2분 타이머 종료      */
 #define PROTO_SEN2_HALL_INT1    0x02U   /* PF9  U24 TCA9554 INT (act.low)    */
@@ -333,7 +370,9 @@ typedef enum
  * 블록 내부 오프셋 (PROTO_MOTOR_OFF_* 참고):
  *  +0     running       0 = 정지, 1 = 회전 중  ★"동작중" 표시등
  *  +1     state         bldc_state_t: 0 IDLE, 1 RUN, 2 UNJAM(잼 해소 역회전), 3 LOCKED
- *  +2     dir           0 = CW, 1 = CCW        ★방향 표시
+ *  +2     dir           DIR 핀 값(= BldcCtrl reverse). ★위에서 본 방향은 모터마다 다르다
+ *                       (N14, rotation_port.h): M1 분쇄 0 = 시계 / **M2 교반 0 = 반시계**.
+ *                       앱은 이 값을 그대로 "CW" 로 그리지 말 것(pv_proto.dir_text).
  *  +3     fault         1 = nFAULT 래치됨
  *  +4-5   u16 target    지령 RPM (설정값. 예 1000 / 1500 / 2000)
  *  +6-7   u16 setpoint  슬루 중인 PI 설정점 (지령까지 올라가는 과정이 보인다)
@@ -341,9 +380,10 @@ typedef enum
  *  +10-11 i16 duty_pm   적용 duty [per-mille, 0~1000]
  *  +12    phase         구간 코드. pattern 에 따라 의미가 다르다:
  *                         PATTERN_TOGGLE : 0 = 구동구간, 1 = 정지구간
- *                         PATTERN_TRI    : 0 = 1차방향, 1 = 정지, 2 = 2차방향
+ *                         PATTERN_TRI    : 0 = 1차방향, 1 = 정지, 2 = 2차방향, 3 = 정지(4구간 식힘 교반)
+ *                         PATTERN_ROT    : 1 = 정지 2 s, 그 외 = 구동(교반 0 정/2 역 — 모음은 0 역/2 정, 분쇄 0)
  *                         그 외          : 0
- *  +13    phase_rep     현 구간의 반복 회차(동작 건조 교반의 "CW/정지 5회" 등). 없으면 0
+ *  +13    phase_rep     현 구간의 반복 회차. PATTERN_ROT 이면 현재 프로파일에서 완료한 운전 수(RotStir_Legs). 없으면 0
  *  +14-15 u16 on_ms     ★현재 패턴의 구동 구간 길이 [ms] (0 = 연속구동)
  *  +16-17 u16 off_ms    ★현재 패턴의 정지 구간 길이 [ms] (0 = 정지구간 없음)
  *  +18-19 u16 phase_ms  현 구간 경과 [ms] (65535 클램프). 남은시간 = on/off_ms - phase_ms
@@ -376,6 +416,9 @@ typedef enum
 #define PROTO_PAT_CONT          1U      /* 연속 구동(구간 토글 없음)          */
 #define PROTO_PAT_TOGGLE        2U      /* 구동 on_ms / 정지 off_ms 반복      */
 #define PROTO_PAT_TRI           3U      /* 1차방향 on / 정지 off / 2차방향 on */
+/* ★2026-09-22 앱 동기화(개정4 회전수 운전). 1회 운전 = 가이드 2회전 + 정지 2 s(P53). 구동 길이는 시간이
+ * 아니라 회전수라 on_ms = 0, off_ms = 2000. 헹굼 WASH/DRAIN·준비 탐색·자가세척·건조 PROCESS(교반·분쇄). */
+#define PROTO_PAT_ROT           4U
 
 /* ---- 0x26 OUTPUT : N = 16 ----------------------------------------------
  * 모든 디지털 출력의 현재 래치 상태(0/1)와, 팬 duty 구간 타이밍.
@@ -389,7 +432,7 @@ typedef enum
  *                        b7-6 = 0
  *  4     wdoor_duty    배수문 지령 duty [%]
  *  5     tdoor_duty    배출문 지령 duty [%]
- *  6-7   u16 fanx_el_s   배기팬 현 구간 경과 [초]   (15분/2분 duty라 초 단위)
+ *  6-7   u16 fanx_el_s   배기팬 현 구간 경과 [초]   (R2 15분/2분 시절 초 단위, R3 C056 = 10 s/5 s)
  *  8-9   u16 fanx_on_s   배기팬 ON 구간 설정 [초]
  * 10-11  u16 fanx_off_s  배기팬 OFF 구간 설정 [초]
  * 12-13  u16 fanb_el_ms  BLDC 식힘팬 현 구간 경과 [ms]
@@ -433,6 +476,159 @@ typedef enum
 #define PROTO_JG_BRAKING        0x01U
 #define PROTO_JG_COOLING        0x02U
 
+#if ENABLE_TESTBENCH_APP
+/* ==========================================================================
+ * §9. 테스트벤치 원격검증 (ENABLE_TESTBENCH_APP)
+ *
+ * 지금까지 tb_* 변수는 디버거 live watch 로만 만질 수 있었다. 이 두 CMD 가
+ * 같은 변수를 회선 위로 열어 PC 앱(src/parts_verification)이 개별기능 검증을
+ * 돌 수 있게 한다. 구현은 Testbench/tb_app.* 에 모여 있다.
+ *
+ * ★양산에서는 main.h 의 ENABLE_TESTBENCH_APP 를 0 으로 둔다 - 시리얼로
+ *   액추에이터를 직접 돌릴 수 있는 경로이기 때문이다.
+ * -------------------------------------------------------------------------- */
+
+/* ---- 0x27 TB_STATE : N = 36 (R/M, 관측 전용) ----------------------------
+ * 0x23 SENSOR / 0x25 MOTOR 와 **겹치지 않는 것**만 담는다. 저쪽은 "장치가 지금
+ * 어떤가"이고 이쪽은 "벤치 플래그가 어떻게 걸려 있고 런이 왜 끝났는가"다.
+ * 모드와 무관하게 언제나 읽을 수 있다.
+ *
+ *  0     en1     b0 grind_en   b1 grind_rev  b2 stir_en    b3 stir_rev
+ *                b4 wdoor_en   b5 wdoor_rev  b6 tdoor_en   b7 tdoor_rev
+ *  1     en2     b0 lift_en    b1 lift_rev   b2 step1_en   b3 step1_dir
+ *                b4 step2_en   b5 step2_dir  b6 water_en   b7 heat_en
+ *  2     en3     b0 valve_drain b1 valve_dry b2 fan_vapor  b3 fan_exhaust
+ *                b4 fan_bldc   b5 speaker_en b6 hall_en    b7 doorhall_en
+ *  3     hit     ★런 종료 사유(전부 래치). b0 wdoor_limit b1 wdoor_time
+ *                b2 tdoor_limit b3 tdoor_time b4 lift_limit b5 lift_time
+ *                b6 tdoor_overrun b7 lift_at_bottom(레벨)
+ *  4     sens    ★센서 인식. b0 wdoor_at_open b1 wdoor_at_close
+ *                b2 tdoor_at_open b3 tdoor_at_close  (도어 4종 = W/TDoor_At*() 를
+ *                매번 직접 읽은 순간 레벨, §0.42 — 종전 tb_doorhall 스냅샷 아님)
+ *                b4 water_present
+ *                b5 water_sen1_level b6 rinse_level(가이드) b7 rinse_spinning
+ *  5     misc    b0 grind_allow(PF0&PF3 재계산) b1 bench_idle b2 arb_disable
+ *                b3 keypad_present b4 braking b5 cooling b6 heat_out
+ *                b7 rinse_settling
+ *  6     keypad_sw   U31 눌림 마스크 (bit i = SW(i+1))
+ *  7     keypad_led  U32 점등 마스크
+ *  8     hall_mask   HS1..HS8
+ *  9     heat_fault  TB_HEAT_FAULT_* 비트마스크
+ * 10-11  i16 heat_temp_d10
+ * 12     app_mode
+ * 13     lid_pos     g_modearb.pos_stable
+ * 14-15  u16 lift_last_run_ms (65535 클램프)
+ * 16-19  u32 rinse_count       가이드 엣지 누계
+ * 20-23  u32 rinse_epr_x100    ★1회전당 엣지 수 x100 (I02 실측 결과)
+ * 24-25  u16 rinse_res_rpm     그 계산에 쓴 RPM
+ * 26-27  u16 rinse_spin_rpm    원샷 구동 설정 RPM
+ * 28     last_item   마지막 TB_CTRL 항목 ID
+ * 29     last_result 0 = ACK, 1 = NAK
+ * 30     last_nak    proto_nak_t
+ * 31     reach   ★도어 리밋 "이번 이동 중 인식" 래치 (§0.42). b0 wdoor_open
+ *                b1 wdoor_close b2 tdoor_open b3 tdoor_close b4~7 = 0.
+ *                = W/TDoor_Reached*(): 이동 시작(LimitArm) 이후 EXTI 하강엣지 OR
+ *                지금 레벨. 벤치·시나리오의 정지 판정과 같은 값. 다음 이동 때 지워진다.
+ * 32-33  u16 write_count   접수된 쓰기 누적
+ * 34-35  u16 reject_count  거절 누적
+ */
+#define PROTO_LEN_TB_STATE      36U
+/* hit 비트 */
+#define PROTO_TB_HIT_WD_LIMIT   0x01U
+#define PROTO_TB_HIT_WD_TIME    0x02U
+#define PROTO_TB_HIT_TD_LIMIT   0x04U
+#define PROTO_TB_HIT_TD_TIME    0x08U
+#define PROTO_TB_HIT_LF_LIMIT   0x10U
+#define PROTO_TB_HIT_LF_TIME    0x20U
+#define PROTO_TB_HIT_TD_OVERRUN 0x40U
+#define PROTO_TB_HIT_LF_BOTTOM  0x80U
+/* misc 비트 */
+#define PROTO_TB_MISC_GRIND_OK  0x01U
+#define PROTO_TB_MISC_BENCH     0x02U
+#define PROTO_TB_MISC_ARB_OFF   0x04U
+#define PROTO_TB_MISC_KEYPAD    0x08U
+#define PROTO_TB_MISC_BRAKING   0x10U
+#define PROTO_TB_MISC_COOLING   0x20U
+#define PROTO_TB_MISC_HEAT_OUT  0x40U
+#define PROTO_TB_MISC_SETTLING  0x80U
+
+/* ---- 0x33 TB_CTRL ------------------------------------------------------
+ * W 요청 : W | 0x33 | LEN=6 | [item, 0x5A, u32 value]
+ *   item  : tb_item_t (Testbench/tb_app.h). 앱 쪽 정본은 pv_proto.py TbItem.
+ *   0x5A  : 오조작 방지 매직. 0x31 CONTROL 의 0xA5 와 **다른 값**을 쓴다 -
+ *           두 명령을 앱이 헷갈려 보내도 서로 통과하지 않게 하기 위함이다.
+ *   value : 리틀엔디안 u32. 불리언은 0/1.
+ * W 응답 : W | 0x33 | LEN=1 | ACK/NAK
+ *   ACK = "썼고 되읽어 같았다"(R0 §2). 원샷 항목(*_once, STEP enable 등)은
+ *   펌웨어가 즉시 소비해 되읽기가 0 일 수 있어 검증을 건너뛰고 항상 ACK 다 -
+ *   실제로 돌았는지는 0x27 의 hit/running 비트로 본다.
+ *   NAK 사유: 벤치 유휴가 아님(BUSY) / 범위 위반·미지원 항목(BAD_VALUE) /
+ *             되읽기 불일치(VERIFY_FAIL) / LEN·매직 오류(BAD_LEN·BAD_VALUE).
+ *
+ * R 응답 : R | 0x33 | LEN=12 | [last_item, last_result, last_nak, bench_idle,
+ *                               u32 last_value, u32 readback]
+ *   readback 은 last_item 의 **현재** 값이다(원샷이면 이미 0 일 수 있다).
+ */
+/* ---- 0x28 TB_STATE2 : N = 64 (R/M, 관측 전용) — 2026-09-22 (§0.39) ---------
+ * 0x27 이 36바이트로 찼고 PROTO_MON 마스크 8비트도 다 써서, 그 뒤에 생긴 벤치들을
+ * 여기 모았다. **주기 송신 비트는 PROTO_MON_TB_STATE 를 0x27 과 공유한다**
+ * (그 비트가 서 있으면 0x27 다음에 0x28 이 따라 나간다). MON_CFG 규격은 불변.
+ * 시간 중 u16 에 담기지 않는 것은 **0.1 s 단위**(ds)다.
+ *
+ *  -- 회전수 운전 엔진 (tb_rotation.h) --
+ *  0     rot_state        TB_ROT_ST_*  (0 IDLE, 1 RUN, 2 DONE)
+ *  1     rot_result       TB_ROT_RES_* (0 -, 1 COMPLETE, 2 FAILED, 3 ABORT, 4 BUSY)
+ *  2     rot_fail_where   TB_ROT_FAIL_* (0 -, 1 CONFIG, 2 PROGRESS, 3 REST, 4 TRAVEL)
+ *  3     rot_flags        b0 selftest_done b1 locked b2 initial_done b3 is_late
+ *                         b4 stir_rest b5 grind_rest b6 pos_src(1=FG) b7 dir_invert
+ *  4     rot_profile      1 WASH / 2 DRAIN / 3 PROCESS
+ *  5     rot_dir          엔진 반환 0 정지 / 1 CW / 2 CCW (위에서 볼 때)
+ *  6-7   u16 rot_legs     완료한 운전 수
+ *  8-11  u32 rot_dir_mask bit i = i번째 운전이 CCW
+ * 12-13  u16 rot_edges    시작 이후 HS6 엣지 (기대 2 x legs)
+ * 14     rot_leg_edges    직전 운전의 HS6 엣지 (기대 2, 255 클램프)
+ * 15     rot_max_legs
+ * 16-17  u16 rot_leg_ms            직전 운전 길이 [ms]
+ * 18-19  u16 rot_rest_wait_ms      ★N15 정지 명령 -> 정지 확인 [ms]
+ * 20-21  u16 rot_rest_wait_max_ms
+ * 22-23  u16 rot_selftest_asserts  자가시험 통과 REQUIRE 수
+ * 24-25  u16 rot_selftest_fail_line 0 = 전부 통과 (tb_rotation.c 줄 번호)
+ * 26-27  u16 rot_rpm               교반 지령 (날개 rpm)
+ *  -- 헹굼 패턴 run E (tb_rinse.h) --
+ * 28     pat_state        TB_RINSE_PAT_* (0 IDLE,1 PARK,2 HOLD,3 RUN,4 DONE)
+ * 29     pat_result       TB_RINSE_PAT_RES_* (0 -,1 REACHED,2 TIMEOUT,3 PARK_FAIL,4 ABORT)
+ * 30     pat_phase        0 정 / 1 정지 / 2 역 / 3 정지
+ * 31     pat_flags        b0 park b1 stop_at40 b2 park_level b3 both_edges
+ * 32-33  u16 pat_edges    패턴 시작 이후 엣지
+ * 34-35  u16 pat_cycles   완료한 4구간 cycle 수
+ * 36-37  u16 pat_epc_x100 ★1 cycle 당 엣지 x100
+ * 38-39  u16 pat_t20_ds   cnt 20 도달 시각 [0.1 s] (0 = 미도달)
+ * 40-41  u16 pat_t40_ds   cnt 40 도달 시각 [0.1 s]
+ * 42-43  u16 pat_max_gap_ds 최장 무엣지 구간 [0.1 s]
+ * 44-45  u16 pat_elapsed_ds 패턴 경과 [0.1 s]
+ *  -- 음성 플래시 U21 (tb_voice.h) --
+ * 46     voice_status     int8 w25q_status_t (0 = OK)
+ * 47     voice_play_err   voice_status_t (0 = OK)
+ * 48     voice_flags      b0 dir_valid b1 dir_crc_ok b2 dir_blank b3 hdr_valid
+ *                         b4 hdr_crc_ok b5 hdr_blank b6 playing(Voice_IsBusy)
+ * 49     voice_slot
+ * 50     voice_dir_slots  DATA_LEN != 0 인 엔트리 수
+ * 51     voice_step       tb_voice_step_t (자가검사 진행 단계)
+ * 52-55  u32 voice_jedec  JEDEC ID (0xEF4018 기대)
+ * 56-57  u16 voice_fails  자가검사 불일치 수 (0 이어야 통과)
+ *  -- R0 코덱 자체검사 (tb_protocol.h) --
+ * 58     proto_done       1 = 최소 1회 완주
+ * 59     reserved         0
+ * 60-61  u16 proto_checks
+ * 62-63  u16 proto_fails  0 이어야 통과
+ */
+#define PROTO_LEN_TB_STATE2     64U
+
+#define PROTO_LEN_TB_CTRL_W     6U      /* W 요청 페이로드 길이               */
+#define PROTO_LEN_TB_CTRL       12U     /* R 응답 페이로드 길이               */
+#define PROTO_TB_MAGIC          0x5AU   /* W 요청 2번째 바이트                */
+#endif /* ENABLE_TESTBENCH_APP */
+
 /* ---- 0x30 MON_CFG : N = 3 (R 응답 / W 요청 동일) -----------------------
  *  0     mask            PROTO_MON_* 비트 (0 = 주기 송신 전면 정지)
  *  1-2   u16 period_ms   주기 (0 = 주기 송신 정지, 그 외 최소 PROTO_MON_MIN_MS)
@@ -446,7 +642,12 @@ typedef enum
 #define PROTO_MON_JUNGJI        0x10U
 #define PROTO_MON_MOTOR         0x20U
 #define PROTO_MON_OUTPUT        0x40U
+#if ENABLE_TESTBENCH_APP
+#define PROTO_MON_TB_STATE      0x80U   /* 0x27 + 0x28 - 테스트벤치 전용     */
+#define PROTO_MON_ALL           0xFFU
+#else
 #define PROTO_MON_ALL           0x7FU
+#endif
 
 /* ==========================================================================
  * §8. 0x31 CONTROL — 시나리오 시작/정지 (앱 -> 장치)
@@ -496,7 +697,12 @@ typedef enum
 	PROTO_ACT_DJ_HEAT_ND= 0x08,  /* 도어 대기까지 생략, '가열중' 즉시 진입    */
 	/* 헹굼·건조를 건너뛰고 식힘 교반(80℃ 미만)부터. 2026-08-26 신설.
 	 * 경과를 120분 지점으로 맞춰 넣으므로 10분 뒤 배출로 자연히 이어진다. */
-	PROTO_ACT_DJ_COOL   = 0x09   /* 동작 식힘부터 (cool_phase=1 강제)         */
+	PROTO_ACT_DJ_COOL   = 0x09,  /* 동작 식힘부터 (cool_phase=1 강제)         */
+	/* ★2026-09-22 앱 동기화(사용자 지시 "자가세척에서부터 시작하는 버튼"). 처리·배출을 건너뛰고
+	 * DJ_SELFCLEAN(21)부터: 배수문 닫힘 → 급수 → 준비 탐색 → WASH → 배수문 열림 + DRAIN → DJ_DONE.
+	 * 공통 해제(K2·K3) 추정은 하지 않는다 — 실제 배출이 없었으므로 판정할 입력이 없다. 급수가 안 되면
+	 * (K3 가 서 있으면) 그대로 E04 로 끝난다(회로를 우회하지 않는다). Dongjak_DebugEnterSelfclean. */
+	PROTO_ACT_DJ_SELFCLEAN = 0x0A /* 동작 자가세척부터                        */
 } proto_action_t;
 
 /* 1 = 배수/강음 스텁도 시작을 허용(벤치에서 스텁 진입만 보고 싶을 때).
@@ -527,9 +733,14 @@ typedef enum
 #ifndef PROTO_MON_HEADROOM_PCT
 #define PROTO_MON_HEADROOM_PCT  150U
 #endif
-/* UART5 보율. 주기 하한 계산에만 쓴다(실제 설정은 MX_UART5_Init). */
+/* UART5 보율. 주기 하한 계산에만 쓴다(실제 설정은 MX_UART5_Init).
+ * ★2026-09-20: 9600 -> 115200. 음성 이미지 다운로드(voiceupdater)를 이 회선
+ *   으로 하기 위해서다. 이 값은 주석이 아니라 Proto_MonMinPeriodMs() 의 실제
+ *   입력이므로 MX_UART5_Init 과 반드시 같이 움직여야 한다 - 9600 인 채로 두면
+ *   주기 하한이 12배 보수적으로 잡힌다(동작은 하지만 앱 반응성이 나빠진다).
+ *   위 §5 의 9600 기준 계산값들은 전부 12배 여유가 생긴 셈이다. */
 #ifndef PROTO_UART_BAUD
-#define PROTO_UART_BAUD         9600UL
+#define PROTO_UART_BAUD         115200UL
 #endif
 /* 상태가 바뀐 순간 주기를 기다리지 않고 즉시 M 을 밀어 올린다(앱 반응성). */
 #ifndef PROTO_MON_ON_CHANGE

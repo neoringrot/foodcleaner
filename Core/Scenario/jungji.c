@@ -6,6 +6,7 @@
  * ========================================================================== */
 
 #include "jungji.h"
+#include "voice.h"
 
 #include "gpio_ctrl.h"
 #include "bldc_ctrl.h"
@@ -27,6 +28,7 @@
 #include "tb_heat.h"
 #include "tb_water.h"
 #include "tb_speaker.h"
+#include "tb_tca9554.h"
 
 /* defaultTask가 갱신하는 온도 스냅샷(정의: freertos.c). */
 extern volatile int16_t g_therm_c_d10[];
@@ -177,20 +179,44 @@ void Jungji_Fans(uint8_t keep_cooling)
 }
 
 /* ---- #15 스피커 ----------------------------------------------------------- */
-/* TODO(음성): "처리 중단 / 추가 투입 불가" 안내 멘트는 미구현. 안내음이 생기면
- * 여기서 무음화 대신 안내 재생을 트리거하도록 바꾼다. */
+/* ★2026-09-20: **재생 중인 안내는 끊지 않는다**(설계서 §7.4 "Jungji_StopAll()은
+ * 음성을 끊지 않는다 - 안내는 정지 후에도 나가야 한다").
+ *
+ * 종전에는 무조건 EN_SPK(PA3)를 내렸는데, 그 핀이 곧 voice.c 의 LM4871_Enable()
+ * 이 켜는 핀이라 **정지 순간 안내가 통째로 잘렸다.** 하필 정지가 걸리는 그 순간
+ * (마개 이탈 등)이야말로 사용자에게 이유를 말해야 하는 때다.
+ *
+ * 벤치 톤(tb_speaker)은 그대로 끈다 - 그건 안내가 아니라 시험음이다.
+ * 재생이 끝나면 voice.c 의 teardown() 이 알아서 앰프를 내린다. */
 void Jungji_Speaker(void)
 {
 	tb_speaker_enable = 0U;
-	gpio_ctrl_off(GPIO_OUT_EN_SPK);
+
+	if (!Voice_IsBusy())
+		gpio_ctrl_off(GPIO_OUT_EN_SPK);
 }
 
 /* ---- #16 테스트벤치 ------------------------------------------------------- */
 /* 정지 직후 모드가 TESTBENCH로 돌아가도 벤치 폴러가 부하를 되살리지 못하도록
  * enable 플래그를 전부 내린다. 냉각팬 플래그는 Jungji_Fans()가 뒤에서 다시
- * 세울 수 있으므로 여기서는 건드리되 순서상 Fans()를 나중에 호출한다. */
+ * 세울 수 있으므로 여기서는 건드리되 순서상 Fans()를 나중에 호출한다.
+ *
+ * ★BLDC 두 대의 디버거 enable(tb_grind_en/tb_stir_en)도 같이 내린다. 이 둘은
+ *   레벨이 아니라 **엣지**로 먹는다(tb_tca9554.c apply_enable): 1로 둔 채 정지가
+ *   걸리면 모터만 서고 플래그는 1로 남아 상승엣지가 영영 다시 서지 않는다 -
+ *   즉 "tb_stir_en = 1 인데 아무것도 안 도는" 상태가 된다. 여기서 0으로
+ *   내려 두면 다음에 1을 쓰는 순간이 정상적인 재기동 엣지가 된다.
+ *   (겸사겸사 BLDC_LOCKED 소프트락도 그 falling edge 의 BldcCtrl_Stop 으로 풀린다.)
+ *
+ *   단락제동과 부딪치지 않나? 부딪치지 않는다. 비상정지 구간에서는
+ *   freertos.c 가 Jungji_IsBraking() 동안 TB_TCA9554_Poll() 자체를 건너뛰므로
+ *   falling edge 가 소비되는 시점은 제동 해제(BldcCtrl_BrakeRelease) 이후이고,
+ *   그때의 BldcCtrl_Stop() 은 이미 정지된 모터에 대한 멱등 호출이다. */
 void Jungji_Testbench(void)
 {
+	tb_grind_en       = 0U;   /* 엣지 재무장 - 위 주석 참조 */
+	tb_stir_en        = 0U;
+
 	tb_wdoor_enable   = 0U;
 	tb_tdoor_enable   = 0U;
 	tb_step1_enable   = 0U;

@@ -47,6 +47,23 @@ extern "C" {
 /* Exported macro ------------------------------------------------------------*/
 /* USER CODE BEGIN EM */
 
+/* ==========================================================================
+ * ENABLE_TESTBENCH_APP - 테스트벤치 원격검증(PC 앱) 코드 일괄 스위치
+ *
+ *   1 = R0 프로토콜에 테스트벤치 제어/관측 명령(0x27 TB_STATE / 0x33 TB_CTRL)을
+ *       얹고 Testbench/tb_app.* 를 빌드한다. PC 앱 src/parts_verification 이
+ *       이 경로로 개별기능 검증을 돈다.
+ *   0 = 위 전부를 컴파일에서 제외한다. 양산 바이너리는 0 으로 둔다 -
+ *       시리얼로 액추에이터를 직접 돌릴 수 있는 경로이기 때문이다.
+ *
+ * 이 매크로 하나만 0 으로 내리면 되도록 모든 추가분을 #if 로 묶어 두었다.
+ * 걸려 있는 곳: Devices/Comm/protocol_r0.{h,c} · Testbench/tb_app.{h,c} ·
+ *               Src/freertos.c(TbApp_Init). tb_app.c 는 파일 전체가 이 가드 안이다.
+ * ========================================================================== */
+#ifndef ENABLE_TESTBENCH_APP
+#define ENABLE_TESTBENCH_APP   1
+#endif
+
 /* USER CODE END EM */
 
 /* Exported functions prototypes ---------------------------------------------*/
@@ -63,12 +80,14 @@ void Error_Handler(void);
 #define o_EN_DOOR_TRASH_GPIO_Port GPIOE
 #define o_EN_DOOR_WATER_Pin GPIO_PIN_4
 #define o_EN_DOOR_WATER_GPIO_Port GPIOE
-#define exti0_BIMETAL_80_Pin GPIO_PIN_0
-#define exti0_BIMETAL_80_GPIO_Port GPIOF
-#define exti0_BIMETAL_80_EXTI_IRQn EXTI0_IRQn
-#define exti1_BIMETAL_60_Pin GPIO_PIN_1
-#define exti1_BIMETAL_60_GPIO_Port GPIOF
-#define exti1_BIMETAL_60_EXTI_IRQn EXTI1_IRQn
+#define o_NEW_SENSOR_EN_Pin GPIO_PIN_5
+#define o_NEW_SENSOR_EN_GPIO_Port GPIOE
+#define exti0_BIMETAL_70_Pin GPIO_PIN_0
+#define exti0_BIMETAL_70_GPIO_Port GPIOF
+#define exti0_BIMETAL_70_EXTI_IRQn EXTI0_IRQn
+#define exti1_BIMETAL_50_Pin GPIO_PIN_1
+#define exti1_BIMETAL_50_GPIO_Port GPIOF
+#define exti1_BIMETAL_50_EXTI_IRQn EXTI1_IRQn
 #define exti2_THALL_CLOSE_Pin GPIO_PIN_2
 #define exti2_THALL_CLOSE_GPIO_Port GPIOF
 #define exti2_THALL_CLOSE_EXTI_IRQn EXTI2_IRQn
@@ -84,9 +103,9 @@ void Error_Handler(void);
 #define exti6_WATER_SEN1_Pin GPIO_PIN_6
 #define exti6_WATER_SEN1_GPIO_Port GPIOF
 #define exti6_WATER_SEN1_EXTI_IRQn EXTI9_5_IRQn
-#define exti7_WATER_SEN2_Pin GPIO_PIN_7
-#define exti7_WATER_SEN2_GPIO_Port GPIOF
-#define exti7_WATER_SEN2_EXTI_IRQn EXTI9_5_IRQn
+#define exti7_NEW_HALL_INT_Pin GPIO_PIN_7
+#define exti7_NEW_HALL_INT_GPIO_Port GPIOF
+#define exti7_NEW_HALL_INT_EXTI_IRQn EXTI9_5_IRQn
 #define exti8_TIMER_OUT_Pin GPIO_PIN_8
 #define exti8_TIMER_OUT_GPIO_Port GPIOF
 #define exti8_TIMER_OUT_EXTI_IRQn EXTI9_5_IRQn
@@ -102,6 +121,8 @@ void Error_Handler(void);
 #define adc1_THERMISTOR2_GPIO_Port GPIOC
 #define adc1_THERMISTOR3_Pin GPIO_PIN_2
 #define adc1_THERMISTOR3_GPIO_Port GPIOC
+#define adc1_WEIGHT_SENS_Pin GPIO_PIN_3
+#define adc1_WEIGHT_SENS_GPIO_Port GPIOC
 #define adc1_DISTANCE_SENS_Pin GPIO_PIN_0
 #define adc1_DISTANCE_SENS_GPIO_Port GPIOA
 #define o_EN_SPK_Pin GPIO_PIN_3
@@ -122,6 +143,9 @@ void Error_Handler(void);
 #define adc1_DC_CURR2_GPIO_Port GPIOB
 #define adc1_DC_CURR3_Pin GPIO_PIN_1
 #define adc1_DC_CURR3_GPIO_Port GPIOB
+#define exti11_HALL_INT3_Pin GPIO_PIN_11
+#define exti11_HALL_INT3_GPIO_Port GPIOF
+#define exti11_HALL_INT3_EXTI_IRQn EXTI15_10_IRQn
 #define exti12_M2_FGOT_Pin GPIO_PIN_12
 #define exti12_M2_FGOT_GPIO_Port GPIOF
 #define exti12_M2_FGOT_EXTI_IRQn EXTI15_10_IRQn
